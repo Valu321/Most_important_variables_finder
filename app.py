@@ -253,11 +253,11 @@ def main():
                         # Wykres ważności cech
                         fig = px.bar(
                             importance_df.head(10),
-                            x='Importance',
-                            y='Feature',
+                            x='Ważność',
+                            y='Cecha',
                             orientation='h',
                             title="Top 10 najważniejszych cech",
-                            color='Importance',
+                            color='ważność',
                             color_continuous_scale='viridis'
                         )
                         fig.update_layout(height=500)
