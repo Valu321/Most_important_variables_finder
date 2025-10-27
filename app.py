@@ -9,11 +9,30 @@ from sklearn.model_selection import train_test_split
 import openai
 import os
 from dotenv import load_dotenv
+from langfuse.decorators import langfuse_context, observe
+from langfuse.openai import openai as langfuse_openai
 import warnings
 warnings.filterwarnings('ignore')
 
 # Załaduj zmienne środowiskowe
 load_dotenv()
+
+# Konfiguracja Langfuse
+try:
+    LANGFUSE_PUBLIC_KEY = os.getenv('LANGFUSE_PUBLIC_KEY')
+    LANGFUSE_SECRET_KEY = os.getenv('LANGFUSE_SECRET_KEY')
+    LANGFUSE_HOST = os.getenv('LANGFUSE_HOST', 'https://cloud.langfuse.com')
+    
+    if LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY:
+        langfuse_openai.api_key = os.getenv('OPENAI_API_KEY')
+        langfuse_openai.langfuse.public_key = LANGFUSE_PUBLIC_KEY
+        langfuse_openai.langfuse.secret_key = LANGFUSE_SECRET_KEY
+        langfuse_openai.langfuse.host = LANGFUSE_HOST
+        LANGFUSE_ENABLED = True
+    else:
+        LANGFUSE_ENABLED = False
+except:
+    LANGFUSE_ENABLED = False
 
 # Konfiguracja strony
 st.set_page_config(
@@ -110,23 +129,21 @@ def analyze_feature_importance(data, target_column, problem_type):
         return None, f"Błąd podczas analizy: {str(e)}"
 
 # Funkcja do generowania opisu przez OpenAI
-def generate_description_with_gpt(importance_df, problem_type, target_column, data_info):
+def generate_description_with_gpt(importance_df, problem_type, target_column, data_info, api_key=None):
     """Generuje opis słowny wyników używając OpenAI API"""
     
     if importance_df is None or len(importance_df) == 0:
         return "Nie udało się wygenerować opisu z powodu błędów w analizie."
     
-    # Sprawdź czy klucz API jest dostępny
-    api_key = os.getenv('OPENAI_API_KEY')
+    # Sprawdź czy klucz API jest dostępny (z parametru lub z pliku .env)
+    if not api_key:
+        api_key = os.getenv('OPENAI_API_KEY')
+    
     if not api_key:
         return """
 ## ⚠️ Brak klucza API
 
-Aby wygenerować opis przez ChatGPT, dodaj klucz OpenAI API do pliku `.env`:
-
-```
-OPENAI_API_KEY=your_api_key_here
-```
+Aby wygenerować opis przez ChatGPT, wprowadź klucz OpenAI API w panelu po lewej stronie lub dodaj go do pliku `.env`.
 
 **Tymczasowy opis:**
 Najważniejsze cechy zostały zidentyfikowane w tabeli powyżej. 
@@ -137,9 +154,14 @@ Najwyższa ważność: **{0}** ({1:.1f}%).
         )
     
     try:
-        # Konfiguracja OpenAI - nowy interfejs
+        # Konfiguracja OpenAI - nowy interfejs z Langfuse
         from openai import OpenAI
-        client = OpenAI(api_key=api_key)
+        
+        # Użyj Langfuse wrapper jeśli jest skonfigurowany
+        if LANGFUSE_ENABLED:
+            client = langfuse_openai
+        else:
+            client = OpenAI(api_key=api_key)
         
         # Przygotuj dane dla GPT
         top_features = importance_df.head(10)
@@ -170,7 +192,19 @@ Wygeneruj opis zawierający:
 Odpowiedz w języku polskim, w formacie Markdown, profesjonalnie ale przystępnie.
 """
         
-        # Wywołanie API - nowy interfejs
+        # Wywołanie API - z obsługą Langfuse
+        if LANGFUSE_ENABLED:
+            # Użyj wrappera Langfuse do automatycznego śledzenia
+            langfuse_context.update_current_trace(
+                name="generate_feature_analysis",
+                user_id=st.session_state.get('user_id', 'anonymous'),
+                metadata={
+                    'problem_type': problem_type,
+                    'target_column': target_column,
+                    'num_features': len(importance_df)
+                }
+            )
+        
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
@@ -205,6 +239,14 @@ def main():
         "Wybierz plik CSV",
         type=['csv'],
         help="Wczytaj plik CSV z danymi do analizy"
+    )
+    
+    # Pole do wprowadzenia klucza OpenAI API
+    st.sidebar.header("🔑 Konfiguracja ChatGPT")
+    openai_api_key = st.sidebar.text_input(
+        "Klucz OpenAI API (opcjonalnie)",
+        type="password",
+        help="Wprowadź klucz API, aby korzystać z automatycznego generowania opisów przez ChatGPT"
     )
     
     if uploaded_file is not None:
@@ -252,12 +294,12 @@ def main():
                         
                         # Wykres ważności cech
                         fig = px.bar(
-                            importance_df.head(10),
-                            x='Ważność',
-                            y='Cecha',
+                            importance_df.tail(10),
+                            x='Importance',
+                            y='Feature',
                             orientation='h',
                             title="Top 10 najważniejszych cech",
-                            color='ważność',
+                            color='Importance',
                             color_continuous_scale='viridis'
                         )
                         fig.update_layout(height=500)
@@ -274,7 +316,7 @@ def main():
                         data_info = f"Zbiór zawiera {len(data)} wierszy i {len(data.columns)} kolumn. Typ problemu: {problem_type}."
                         
                         with st.spinner("🤖 Generuję opis przez ChatGPT..."):
-                            description = generate_description_with_gpt(importance_df, problem_type, target_column, data_info)
+                            description = generate_description_with_gpt(importance_df, problem_type, target_column, data_info, openai_api_key)
                             st.markdown(description)
                         
                     else:
@@ -304,11 +346,6 @@ def main():
         - Kolumny numeryczne lub kategoryczne
         - Maksymalnie 70% wartości brakujących w kolumnach
         
-        ## 🔑 Konfiguracja ChatGPT:
-        Aby korzystać z automatycznego generowania opisów, dodaj klucz OpenAI API do pliku `.env`:
-        ```
-        OPENAI_API_KEY=your_api_key_here
-        ```
         """)
 
 if __name__ == "__main__":

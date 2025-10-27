@@ -8,3 +8,5 @@ xgboost>=1.7.0
 lightgbm>=4.0.0
 openai>=1.0.0
 python-dotenv>=1.0.0
+langfuse>=2.0.0
+langfuse[decorator]>=2.0.0
