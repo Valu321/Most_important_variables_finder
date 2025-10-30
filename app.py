@@ -69,21 +69,27 @@ def analyze_feature_importance(data, target_column, problem_type):
     """Analizuje ważność cech używając PyCaret"""
     
     # Przygotowanie danych
-    feature_columns = [col for col in data.columns if col != target_column]
     
-    # Usuń kolumny z dużą liczbą wartości brakujących
+    # 1. Usuń kolumny z dużą liczbą wartości brakujących
     data_clean = data.dropna(thresh=len(data) * 0.7, axis=1)
     
-    # Usuń wiersze z wartościami brakującymi
+    # 2. Usuń wiersze z wartościami brakującymi
     data_clean = data_clean.dropna()
-    
+
+    # 3. Sprawdź, czy kolumna docelowa przetrwała czyszczenie
+    if target_column not in data_clean.columns:
+        return None, f"Kolumna docelowa '{target_column}' została usunięta podczas czyszczenia (prawdopodobnie miała zbyt wiele brakujących wartości)."
+
     if len(data_clean) < 10:
         return None, "Za mało danych po czyszczeniu"
     
+    # === POCZĄTEK POPRAWIONEGO BLOKU ===
+    # Ten blok 'try...except' musi być WEWNĄTRZ funkcji
     try:
         if problem_type == "klasyfikacja":
             # Konfiguracja PyCaret dla klasyfikacji
-            clf = setup(
+            # Zmieniono nazwę zmiennej, aby uniknąć konfliktu z importem (clf)
+            setup_env = setup(
                 data_clean,
                 target=target_column,
                 session_id=123
@@ -92,15 +98,27 @@ def analyze_feature_importance(data, target_column, problem_type):
             # Porównanie modeli
             best_model = compare_models(include=['rf', 'xgboost', 'lightgbm'], verbose=False)
             
-            # Analiza ważności cech
+            # === POPRAWIONA LOGIKA ===
+            # Pobierz nazwy cech BEZPOŚREDNIO z PyCaret (po transformacjach)
+            feature_names = get_config('X_train_transformed').columns
+            
+            # Pobierz ważności z modelu
+            importances = best_model.feature_importances_ if hasattr(best_model, 'feature_importances_') else [0] * len(feature_names)
+            
+            # Sprawdzenie (choć teraz powinno być zawsze równe)
+            if len(feature_names) != len(importances):
+                 return None, f"Błąd wewnętrzny: Niezgodność cech ({len(feature_names)}) i ważności ({len(importances)})."
+
+            # Tworzenie DataFrame
             importance_df = pd.DataFrame({
-                'Feature': feature_columns,
-                'Importance': best_model.feature_importances_ if hasattr(best_model, 'feature_importances_') else [0] * len(feature_columns)
+                'Feature': feature_names,
+                'Importance': importances
             })
             
         else:  # regresja
             # Konfiguracja PyCaret dla regresji
-            reg = setup(
+            # Zmieniono nazwę zmiennej
+            setup_env = setup(
                 data_clean,
                 target=target_column,
                 session_id=123
@@ -109,10 +127,21 @@ def analyze_feature_importance(data, target_column, problem_type):
             # Porównanie modeli
             best_model = compare_models(include=['rf', 'xgboost', 'lightgbm'], verbose=False)
             
-            # Analiza ważności cech
+            # === POPRAWIONA LOGIKA ===
+            # Pobierz nazwy cech BEZPOŚREDNIO z PyCaret (po transformacjach)
+            feature_names = get_config('X_train_transformed').columns
+            
+            # Pobierz ważności z modelu
+            importances = best_model.feature_importances_ if hasattr(best_model, 'feature_importances_') else [0] * len(feature_names)
+
+            # Sprawdzenie
+            if len(feature_names) != len(importances):
+                 return None, f"Błąd wewnętrzny: Niezgodność cech ({len(feature_names)}) i ważności ({len(importances)})."
+
+            # Tworzenie DataFrame
             importance_df = pd.DataFrame({
-                'Feature': feature_columns,
-                'Importance': best_model.feature_importances_ if hasattr(best_model, 'feature_importances_') else [0] * len(feature_columns)
+                'Feature': feature_names,
+                'Importance': importances
             })
         
         # Sortuj według ważności
@@ -122,6 +151,7 @@ def analyze_feature_importance(data, target_column, problem_type):
         
     except Exception as e:
         return None, f"Błąd podczas analizy: {str(e)}"
+    # === KONIEC POPRAWIONEGO BLOKU ===
 
 # Funkcja do generowania opisu przez OpenAI
 def generate_description_with_gpt(importance_df, problem_type, target_column, data_info, api_key=None):
@@ -247,7 +277,7 @@ def main():
     if uploaded_file is not None:
         try:
             # Wczytanie danych
-            data = pd.read_csv(uploaded_file)
+            data = pd.read_csv(uploaded_file, sep=None, engine='python')
             
             st.sidebar.success(f"✅ Wczytano {len(data)} wierszy i {len(data.columns)} kolumn")
             
