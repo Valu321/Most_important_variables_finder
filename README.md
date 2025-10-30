@@ -2,6 +2,14 @@
 
 Aplikacja Streamlit do automatycznej analizy ważności cech w zbiorach danych CSV. System automatycznie rozpoznaje typ problemu (klasyfikacja/regresja), buduje najlepszy model i wyświetla najważniejsze cechy wpływające na zmienną docelową.
 
+## 🚀 Szybkie wdrożenie
+
+### DigitalOcean App Platform (ZALECANE - najprostsze)
+Zobacz: [DEPLOYMENT_APP_PLATFORM.md](DEPLOYMENT_APP_PLATFORM.md) - kompletna instrukcja wdrożenia na App Platform.
+
+### DigitalOcean Droplet (zaawansowane)
+Zobacz: [DEPLOYMENT.md](DEPLOYMENT.md) - instrukcja wdrożenia na serwerze Droplet z Dockerem.
+
 ## 🚀 Funkcjonalności
 
 - **Wczytywanie danych CSV** - intuicyjny interfejs do wczytywania plików

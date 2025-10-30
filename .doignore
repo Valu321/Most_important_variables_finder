@@ -1,0 +1,22 @@
+# Pliki do ignorowania podczas wdrożenia na App Platform
+.env
+*.log
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.ipynb_checkpoints/
+*.ipynb
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+logs.log
+

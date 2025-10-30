@@ -47,27 +47,22 @@ st.markdown("---")
 
 # Funkcja do określenia typu problemu
 def determine_problem_type(data, target_column):
-    """Określa czy problem to klasyfikacja czy regresja"""
+    """Określa czy problem to klasyfikacja czy regresja."""
     target_data = data[target_column]
-    
-    # Sprawdź czy kolumna docelowa to liczby całkowite z małą liczbą unikalnych wartości
-    if target_data.dtype in ['int64', 'int32', 'object']:
-        unique_values = target_data.nunique()
-        total_values = len(target_data)
-        
-        # Jeśli mniej niż 20% unikalnych wartości, traktuj jako klasyfikację
-        if unique_values / total_values < 0.2:
-            return "klasyfikacja"
-    
-    # Sprawdź czy można przekonwertować na liczby
-    try:
-        numeric_data = pd.to_numeric(target_data, errors='coerce')
-        if numeric_data.isna().sum() / len(numeric_data) < 0.1:  # Mniej niż 10% wartości nie-numerycznych
-            return "regresja"
-    except:
-        pass
-    
-    return "klasyfikacja"  # Domyślnie klasyfikacja
+
+    # Jeśli ma mało unikalnych wartości względem rozmiaru zbioru → klasyfikacja
+    unique_values = target_data.nunique(dropna=True)
+    total_values = len(target_data)
+    if total_values > 0 and unique_values / total_values < 0.2:
+        return "klasyfikacja"
+
+    # Jeżeli większość wartości daje się bezpiecznie zrzutować na liczby → regresja
+    numeric_data = pd.to_numeric(target_data, errors='coerce')
+    non_numeric_ratio = numeric_data.isna().mean()
+    if non_numeric_ratio < 0.1:
+        return "regresja"
+
+    return "klasyfikacja"
 
 # Funkcja do analizy ważności cech
 def analyze_feature_importance(data, target_column, problem_type):
@@ -294,7 +289,7 @@ def main():
                         
                         # Wykres ważności cech
                         fig = px.bar(
-                            importance_df.tail(10),
+                            importance_df.head(10),
                             x='Importance',
                             y='Feature',
                             orientation='h',
@@ -349,4 +344,6 @@ def main():
         """)
 
 if __name__ == "__main__":
+    # Streamlit automatycznie użyje PORT z --server.port w run command
+    # PORT jest ustawiany przez zmienną środowiskową $PORT w App Platform
     main()

@@ -133,6 +133,30 @@ apt install git -y
 apt install docker-compose -y
 ```
 
+### 5.5. Konfiguracja Firewall (WYMAGANE dla publicznego dostępu)
+```bash
+# Zainstaluj i skonfiguruj UFW (firewall)
+apt install ufw -y
+
+# Zezwól na SSH (WAŻNE! Bez tego stracisz dostęp)
+ufw allow 22/tcp
+
+# Zezwól na port aplikacji Streamlit
+ufw allow 8501/tcp
+
+# Jeśli korzystasz z HTTP/HTTPS przez Nginx
+ufw allow 80/tcp
+ufw allow 443/tcp
+
+# Włącz firewall
+ufw --force enable
+
+# Sprawdź status
+ufw status
+```
+
+**⚠️ UWAGA:** Bez tego kroku aplikacja może nie być dostępna publicznie!
+
 ---
 
 ## 🔧 KROK 6: Konfiguracja aplikacji na serwerze
@@ -345,12 +369,51 @@ docker ps
 - [ ] Konto na Langfuse utworzone
 - [ ] Klucze API skonfigurowane
 - [ ] Docker zainstalowany na serwerze
+- [ ] **Firewall skonfigurowany (port 8501 otwarty)** ⚠️
 - [ ] Aplikacja zbudowana i przetestowana lokalnie
 - [ ] Aplikacja wdrożona na DigitalOcean
 - [ ] Domena skonfigurowana (opcjonalne)
 - [ ] SSL zainstalowany (opcjonalne)
-- [ ] Aplikacja dostępna publicznie
+- [ ] Aplikacja dostępna publicznie (test z innego komputera)
 - [ ] Metryki w Langfuse działają poprawnie
+- [ ] Rozważono bezpieczeństwo (uwierzytelnianie, rate limiting)
+
+---
+
+## 🔒 Bezpieczeństwo i dostęp publiczny
+
+### ✅ Co działa:
+- Aplikacja będzie dostępna publicznie dla wszystkich użytkowników
+- Użytkownicy mogą wczytywać własne pliki CSV i korzystać z aplikacji
+- Dane są przetwarzane po stronie serwera
+
+### ⚠️ Ważne informacje o bezpieczeństwie:
+
+1. **Brak uwierzytelniania**: 
+   - Aplikacja **nie ma** mechanizmu logowania
+   - **Każdy** kto zna adres IP/domenę może korzystać z aplikacji
+   - Rozważ dodanie uwierzytelniania dla produkcji
+
+2. **Koszty API**:
+   - Jeśli używasz OpenAI API, koszty będą naliczane za każde użycie
+   - Każdy użytkownik może generować zapytania do ChatGPT
+   - Monitoruj zużycie API w dashboardzie OpenAI
+
+3. **Ograniczenie dostępu** (opcjonalne):
+   Jeśli chcesz ograniczyć dostęp, możesz:
+   - Dodać uwierzytelnianie Streamlit: utwórz plik `.streamlit/config.toml`
+   - Użyj Nginx basic auth (dodaj w konfiguracji Nginx)
+   - Dodaj IP whitelist w DigitalOcean firewall
+
+4. **Bezpieczeństwo kluczy API**:
+   - Klucze API są bezpiecznie przechowywane w pliku `.env`
+   - Plik `.env` nie jest udostępniany użytkownikom (tylko na serwerze)
+
+### 🚀 Dla produkcji rekomenduje się:
+- Dodanie uwierzytelniania (hasło lub OAuth)
+- Monitoring zużycia zasobów
+- Rate limiting dla API calls
+- Backup danych i logów
 
 ---
 
