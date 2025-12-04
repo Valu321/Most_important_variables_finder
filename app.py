@@ -1,379 +1,336 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
-from pycaret.classification import *
-from pycaret.regression import *
-import plotly.express as px
-import plotly.graph_objects as go
-from sklearn.model_selection import train_test_split
-import openai
 import os
+import warnings
+from typing import Tuple, Optional, Any
+
+# Imports for visualization
+import plotly.express as px
+
+# PyCaret imports with aliases to prevent namespace collision
+from pycaret import classification as pc_clf
+from pycaret import regression as pc_reg
+
+# OpenAI & Observability
 from dotenv import load_dotenv
+from openai import OpenAI
 from langfuse.decorators import langfuse_context, observe
 from langfuse.openai import openai as langfuse_openai
-import warnings
+
+# Suppress warnings
 warnings.filterwarnings('ignore')
 
-# Załaduj zmienne środowiskowe
-load_dotenv()
-
-# Konfiguracja Langfuse
-try:
-    LANGFUSE_PUBLIC_KEY = os.getenv('LANGFUSE_PUBLIC_KEY')
-    LANGFUSE_SECRET_KEY = os.getenv('LANGFUSE_SECRET_KEY')
-    LANGFUSE_HOST = os.getenv('LANGFUSE_HOST', 'https://cloud.langfuse.com')
-    
-    if LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY:
-        langfuse_openai.api_key = os.getenv('OPENAI_API_KEY')
-        langfuse_openai.langfuse.public_key = LANGFUSE_PUBLIC_KEY
-        langfuse_openai.langfuse.secret_key = LANGFUSE_SECRET_KEY
-        langfuse_openai.langfuse.host = LANGFUSE_HOST
-        LANGFUSE_ENABLED = True
-    else:
-        LANGFUSE_ENABLED = False
-except:
-    LANGFUSE_ENABLED = False
-
-# Konfiguracja strony
+# --- CONFIGURATION ---
 st.set_page_config(
-    page_title="Analiza Najważniejszych Cech",
+    page_title="Analiza Najważniejszych Cech (Powered by GPT-4o-mini)",
     page_icon="📊",
     layout="wide"
 )
+load_dotenv()
 
-# Tytuł aplikacji
-st.title("📊 Aplikacja do znajdowania najważniejszych cech w zbiorze danych")
-st.markdown("---")
+# --- SERVICES ---
 
-# Funkcja do określenia typu problemu
-def determine_problem_type(data, target_column):
-    """Określa czy problem to klasyfikacja czy regresja."""
-    target_data = data[target_column]
-
-    # Jeśli ma mało unikalnych wartości względem rozmiaru zbioru → klasyfikacja
-    unique_values = target_data.nunique(dropna=True)
-    total_values = len(target_data)
-    if total_values > 0 and unique_values / total_values < 0.2:
-        return "klasyfikacja"
-
-    # Jeżeli większość wartości daje się bezpiecznie zrzutować na liczby → regresja
-    numeric_data = pd.to_numeric(target_data, errors='coerce')
-    non_numeric_ratio = numeric_data.isna().mean()
-    if non_numeric_ratio < 0.1:
-        return "regresja"
-
-    return "klasyfikacja"
-
-# Funkcja do analizy ważności cech
-def analyze_feature_importance(data, target_column, problem_type):
-    """Analizuje ważność cech używając PyCaret"""
+class ConfigService:
+    """Obsługuje konfigurację środowiska i klucze API."""
     
-    # Przygotowanie danych
-    
-    # 1. Usuń kolumny z dużą liczbą wartości brakujących
-    data_clean = data.dropna(thresh=len(data) * 0.7, axis=1)
-    
-    # 2. Usuń wiersze z wartościami brakującymi
-    data_clean = data_clean.dropna()
-
-    # 3. Sprawdź, czy kolumna docelowa przetrwała czyszczenie
-    if target_column not in data_clean.columns:
-        return None, f"Kolumna docelowa '{target_column}' została usunięta podczas czyszczenia (prawdopodobnie miała zbyt wiele brakujących wartości)."
-
-    if len(data_clean) < 10:
-        return None, "Za mało danych po czyszczeniu"
-    
-    # === POCZĄTEK POPRAWIONEGO BLOKU ===
-    # Ten blok 'try...except' musi być WEWNĄTRZ funkcji
-    try:
-        if problem_type == "klasyfikacja":
-            # Konfiguracja PyCaret dla klasyfikacji
-            # Zmieniono nazwę zmiennej, aby uniknąć konfliktu z importem (clf)
-            setup_env = setup(
-                data_clean,
-                target=target_column,
-                session_id=123
-            )
+    @staticmethod
+    def get_langfuse_config() -> bool:
+        """Sprawdza i konfiguruje Langfuse, jeśli dane uwierzytelniające są obecne."""
+        try:
+            public_key = os.getenv('LANGFUSE_PUBLIC_KEY')
+            secret_key = os.getenv('LANGFUSE_SECRET_KEY')
+            host = os.getenv('LANGFUSE_HOST', 'https://cloud.langfuse.com')
             
-            # Porównanie modeli
-            best_model = compare_models(include=['rf', 'xgboost', 'lightgbm'], verbose=False)
-            
-            # === POPRAWIONA LOGIKA ===
-            # Pobierz nazwy cech BEZPOŚREDNIO z PyCaret (po transformacjach)
-            feature_names = get_config('X_train_transformed').columns
-            
-            # Pobierz ważności z modelu
-            importances = best_model.feature_importances_ if hasattr(best_model, 'feature_importances_') else [0] * len(feature_names)
-            
-            # Sprawdzenie (choć teraz powinno być zawsze równe)
-            if len(feature_names) != len(importances):
-                 return None, f"Błąd wewnętrzny: Niezgodność cech ({len(feature_names)}) i ważności ({len(importances)})."
+            if public_key and secret_key:
+                langfuse_openai.langfuse.public_key = public_key
+                langfuse_openai.langfuse.secret_key = secret_key
+                langfuse_openai.langfuse.host = host
+                return True
+            return False
+        except Exception:
+            return False
 
-            # Tworzenie DataFrame
-            importance_df = pd.DataFrame({
-                'Feature': feature_names,
-                'Importance': importances
-            })
+    @staticmethod
+    def get_openai_client(api_key: Optional[str], langfuse_enabled: bool):
+        """Zwraca odpowiedniego klienta OpenAI (z wrapperem Langfuse lub bez)."""
+        if not api_key:
+            return None
             
-        else:  # regresja
-            # Konfiguracja PyCaret dla regresji
-            # Zmieniono nazwę zmiennej
-            setup_env = setup(
-                data_clean,
-                target=target_column,
-                session_id=123
-            )
-            
-            # Porównanie modeli
-            best_model = compare_models(include=['rf', 'xgboost', 'lightgbm'], verbose=False)
-            
-            # === POPRAWIONA LOGIKA ===
-            # Pobierz nazwy cech BEZPOŚREDNIO z PyCaret (po transformacjach)
-            feature_names = get_config('X_train_transformed').columns
-            
-            # Pobierz ważności z modelu
-            importances = best_model.feature_importances_ if hasattr(best_model, 'feature_importances_') else [0] * len(feature_names)
-
-            # Sprawdzenie
-            if len(feature_names) != len(importances):
-                 return None, f"Błąd wewnętrzny: Niezgodność cech ({len(feature_names)}) i ważności ({len(importances)})."
-
-            # Tworzenie DataFrame
-            importance_df = pd.DataFrame({
-                'Feature': feature_names,
-                'Importance': importances
-            })
-        
-        # Sortuj według ważności
-        importance_df = importance_df.sort_values('Importance', ascending=False)
-        
-        return importance_df, best_model
-        
-    except Exception as e:
-        return None, f"Błąd podczas analizy: {str(e)}"
-    # === KONIEC POPRAWIONEGO BLOKU ===
-
-# Funkcja do generowania opisu przez OpenAI
-def generate_description_with_gpt(importance_df, problem_type, target_column, data_info, api_key=None):
-    """Generuje opis słowny wyników używając OpenAI API"""
-    
-    if importance_df is None or len(importance_df) == 0:
-        return "Nie udało się wygenerować opisu z powodu błędów w analizie."
-    
-    # Sprawdź czy klucz API jest dostępny (z parametru lub z pliku .env)
-    if not api_key:
-        api_key = os.getenv('OPENAI_API_KEY')
-    
-    if not api_key:
-        return """
-## ⚠️ Brak klucza API
-
-Aby wygenerować opis przez ChatGPT, wprowadź klucz OpenAI API w panelu po lewej stronie lub dodaj go do pliku `.env`.
-
-**Tymczasowy opis:**
-Najważniejsze cechy zostały zidentyfikowane w tabeli powyżej. 
-Najwyższa ważność: **{0}** ({1:.1f}%).
-        """.format(
-            importance_df.iloc[0]['Feature'],
-            (importance_df.iloc[0]['Importance'] / importance_df['Importance'].sum()) * 100
-        )
-    
-    try:
-        # Konfiguracja OpenAI - nowy interfejs z Langfuse
-        from openai import OpenAI
-        
-        # Użyj Langfuse wrapper jeśli jest skonfigurowany
-        if LANGFUSE_ENABLED:
-            client = langfuse_openai
+        if langfuse_enabled:
+            langfuse_openai.api_key = api_key
+            return langfuse_openai
         else:
-            client = OpenAI(api_key=api_key)
-        
-        # Przygotuj dane dla GPT
-        top_features = importance_df.head(10)
-        features_text = "\n".join([
-            f"{i+1}. {row['Feature']}: {row['Importance']:.4f}" 
-            for i, (_, row) in enumerate(top_features.iterrows())
-        ])
-        
-        # Prompt dla GPT
-        prompt = f"""
-Jesteś ekspertem w analizie danych i machine learning. Przeanalizuj wyniki analizy ważności cech i wygeneruj profesjonalny opis.
+            return OpenAI(api_key=api_key)
 
-DANE:
-- Typ problemu: {problem_type}
-- Kolumna docelowa: {target_column}
-- Liczba cech: {len(importance_df)}
-- Informacje o danych: {data_info}
+class AnalysisService:
+    """Obsługuje logikę analizy danych przy użyciu PyCaret."""
 
-NAJWAŻNIEJSZE CECHY:
-{features_text}
-
-Wygeneruj opis zawierający:
-1. Podsumowanie analizy
-2. Interpretację najważniejszych cech
-3. Praktyczne wnioski biznesowe
-4. Konkretne rekomendacje
-
-Odpowiedz w języku polskim, w formacie Markdown, profesjonalnie ale przystępnie.
-"""
+    @staticmethod
+    def determine_problem_type(data: pd.DataFrame, target_column: str) -> str:
+        """Heurystycznie określa, czy problem to klasyfikacja czy regresja."""
+        target_data = data[target_column]
         
-        # Wywołanie API - z obsługą Langfuse
-        if LANGFUSE_ENABLED:
-            # Użyj wrappera Langfuse do automatycznego śledzenia
-            langfuse_context.update_current_trace(
-                name="generate_feature_analysis",
-                user_id=st.session_state.get('user_id', 'anonymous'),
-                metadata={
-                    'problem_type': problem_type,
-                    'target_column': target_column,
-                    'num_features': len(importance_df)
-                }
-            )
+        # Sprawdzenie klasyfikacji: mała liczba unikalnych wartości względem rozmiaru danych
+        unique_values = target_data.nunique(dropna=True)
+        total_values = len(target_data)
         
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "Jesteś ekspertem w analizie danych i machine learning. Odpowiadaj profesjonalnie w języku polskim."},
-                {"role": "user", "content": prompt}
-            ],
-            max_tokens=1000,
-            temperature=0.7
-        )
-        
-        return f"## 🤖 Analiza wygenerowana przez ChatGPT\n\n{response.choices[0].message.content}"
-        
-    except Exception as e:
-        return f"""
-## ❌ Błąd podczas generowania opisu
+        if total_values > 0 and unique_values / total_values < 0.2:
+            return "klasyfikacja"
 
-Nie udało się wygenerować opisu przez ChatGPT: {str(e)}
+        # Sprawdzenie regresji: dane głównie numeryczne
+        numeric_data = pd.to_numeric(target_data, errors='coerce')
+        non_numeric_ratio = numeric_data.isna().mean()
+        
+        if non_numeric_ratio < 0.1:
+            return "regresja"
 
-**Podstawowe informacje:**
-- Typ problemu: {problem_type}
-- Kolumna docelowa: {target_column}
-- Najważniejsza cecha: {importance_df.iloc[0]['Feature']}
-- Liczba analizowanych cech: {len(importance_df)}
+        return "klasyfikacja" # Domyślny fallback
+
+    @staticmethod
+    def run_analysis(data: pd.DataFrame, target_column: str, problem_type: str) -> Tuple[Optional[pd.DataFrame], Any]:
         """
+        Uruchamia potok analizy PyCaret.
+        """
+        # 1. Czyszczenie danych
+        data_clean = data.dropna(thresh=len(data) * 0.7, axis=1) # Usuń rzadkie kolumny
+        data_clean = data_clean.dropna() # Usuń wiersze z brakami
+        
+        if target_column not in data_clean.columns:
+            return None, f"Kolumna docelowa '{target_column}' została usunięta (zbyt wiele braków danych)."
+            
+        if len(data_clean) < 10:
+            return None, "Za mało danych po czyszczeniu (wymagane min. 10 wierszy)."
 
-# Główna aplikacja
-def main():
-    # Sidebar dla wczytywania pliku
-    st.sidebar.header("📁 Wczytaj dane")
+        # 2. Wybór modułu PyCaret
+        module = pc_clf if problem_type == "klasyfikacja" else pc_reg
+
+        try:
+            # 3. Konfiguracja eksperymentu
+            module.setup(
+                data=data_clean,
+                target=target_column,
+                session_id=123,
+                verbose=False,
+                html=False
+            )
+            
+            # 4. Trenowanie i porównanie modeli
+            # Używamy lekkich modeli dla szybkości w demo
+            best_model = module.compare_models(
+                include=['rf', 'xgboost', 'lightgbm'], 
+                verbose=False
+            )
+            
+            # 5. Ekstrakcja ważności cech
+            # Pobierz nazwy cech po transformacji
+            X_transformed = module.get_config('X_train_transformed')
+            feature_names = X_transformed.columns
+            
+            importances = [0] * len(feature_names)
+            if hasattr(best_model, 'feature_importances_'):
+                 importances = best_model.feature_importances_
+            
+            if len(feature_names) != len(importances):
+                return None, f"Niezgodność wymiarów cech ({len(feature_names)}) i ważności ({len(importances)})."
+
+            importance_df = pd.DataFrame({
+                'Feature': feature_names,
+                'Importance': importances
+            }).sort_values('Importance', ascending=False)
+            
+            return importance_df, best_model
+
+        except Exception as e:
+            return None, f"Błąd PyCaret: {str(e)}"
+
+class OpenAIService:
+    """Obsługuje generowanie tekstu przy użyciu OpenAI."""
+    
+    @staticmethod
+    def generate_description(
+        client: Any,
+        importance_df: pd.DataFrame, 
+        problem_type: str, 
+        target_column: str, 
+        data_info: str,
+        langfuse_enabled: bool
+    ) -> str:
+        
+        if client is None:
+            top_feature = importance_df.iloc[0]
+            pct = (top_feature['Importance'] / importance_df['Importance'].sum()) * 100
+            return f"""
+            ## ⚠️ Brak klucza API
+            
+            Dostępny jest tylko tryb podstawowy. Wprowadź klucz OpenAI API, aby uzyskać pełny opis.
+            
+            **Najważniejsza cecha:** {top_feature['Feature']} ({pct:.1f}%)
+            """
+
+        try:
+            # Przygotowanie promptu
+            top_features = importance_df.head(10)
+            features_text = "\n".join([
+                f"{i+1}. {row['Feature']}: {row['Importance']:.4f}" 
+                for i, (_, row) in enumerate(top_features.iterrows())
+            ])
+            
+            prompt = f"""
+            Jesteś ekspertem Data Science. Przeanalizuj wyniki modelu ML.
+            
+            KONTEKST:
+            - Problem: {problem_type}
+            - Cel: Przewidywanie kolumny '{target_column}'
+            - Dane: {data_info}
+            
+            WYNIKI (Ważność cech z modelu):
+            {features_text}
+            
+            ZADANIE:
+            Stwórz zwięzły raport biznesowy w Markdown.
+            1. Zidentyfikuj kluczowe czynniki (drivers).
+            2. Postaw hipotezy dlaczego te cechy są ważne.
+            3. Zasugeruj konkretne działania biznesowe.
+            
+            Styl: Profesjonalny, zwięzły, konkretny.
+            """
+
+            # Langfuse Trace
+            if langfuse_enabled:
+                langfuse_context.update_current_trace(
+                    name="generate_analysis_desc",
+                    metadata={
+                        "problem": problem_type, 
+                        "target": target_column,
+                        "model": "gpt-4o-mini"
+                    }
+                )
+
+            # Wywołanie API - ZMIANA MODELU NA GPT-4o-mini
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",  # <--- ZMIANA: Najnowszy, tani model
+                messages=[
+                    {"role": "system", "content": "Jesteś pomocnym analitykiem danych. Odpowiadasz w języku polskim."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.7,
+                max_tokens=1000
+            )
+            
+            return f"## 🤖 Analiza AI (GPT-4o-mini)\n\n{response.choices[0].message.content}"
+
+        except Exception as e:
+            return f"## ❌ Błąd generowania opisu\n\n{str(e)}"
+
+# --- UI COMPONENTS ---
+
+def render_sidebar():
+    st.sidebar.header("📁 Dane i Konfiguracja")
     
     uploaded_file = st.sidebar.file_uploader(
-        "Wybierz plik CSV",
+        "Wgraj plik CSV", 
         type=['csv'],
-        help="Wczytaj plik CSV z danymi do analizy"
+        help="Plik musi zawierać nagłówki kolumn."
     )
     
-    # Pole do wprowadzenia klucza OpenAI API
-    st.sidebar.header("🔑 Konfiguracja ChatGPT")
-    openai_api_key = st.sidebar.text_input(
-        "Klucz OpenAI API (opcjonalnie)",
+    st.sidebar.divider()
+    
+    st.sidebar.header("🔑 API")
+    api_key = st.sidebar.text_input(
+        "OpenAI API Key",
         type="password",
-        help="Wprowadź klucz API, aby korzystać z automatycznego generowania opisów przez ChatGPT"
+        value=os.getenv("OPENAI_API_KEY", ""),
+        help="Pozostaw puste jeśli ustawione w .env"
     )
     
-    if uploaded_file is not None:
-        try:
-            # Wczytanie danych
-            data = pd.read_csv(uploaded_file, sep=None, engine='python')
-            
-            st.sidebar.success(f"✅ Wczytano {len(data)} wierszy i {len(data.columns)} kolumn")
-            
-            # Wyświetlenie podstawowych informacji o danych
-            st.header("📊 Podgląd danych")
-            
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.subheader("Pierwsze 5 wierszy")
-                st.dataframe(data.head())
-            
-            with col2:
-                st.subheader("Podstawowe statystyki")
-                st.dataframe(data.describe())
-            
-            # Wybór kolumny docelowej
-            st.header("🎯 Wybór kolumny docelowej")
-            
-            target_column = st.selectbox(
-                "Wybierz kolumnę docelową:",
-                options=data.columns,
-                help="Wybierz kolumnę, dla której chcesz znaleźć najważniejsze cechy"
-            )
-            
-            if st.button("🔍 Rozpocznij analizę", type="primary"):
-                with st.spinner("Analizuję dane..."):
-                    # Określenie typu problemu
-                    problem_type = determine_problem_type(data, target_column)
-                    
-                    st.header(f"🤖 Typ problemu: {problem_type.title()}")
-                    st.info(f"System automatycznie rozpoznał, że to problem **{problem_type}**")
-                    
-                    # Analiza ważności cech
-                    importance_df, model = analyze_feature_importance(data, target_column, problem_type)
-                    
-                    if importance_df is not None:
-                        st.header("📈 Najważniejsze cechy")
-                        
-                        # Wykres ważności cech
-                        fig = px.bar(
-                            importance_df.head(10),
-                            x='Importance',
-                            y='Feature',
-                            orientation='h',
-                            title="Top 10 najważniejszych cech",
-                            color='Importance',
-                            color_continuous_scale='viridis'
-                        )
-                        fig.update_layout(height=500)
-                        st.plotly_chart(fig, use_container_width=True)
-                        
-                        # Tabela z wynikami
-                        st.subheader("📋 Szczegółowe wyniki")
-                        st.dataframe(importance_df, use_container_width=True)
-                        
-                        # Generowanie opisu przez ChatGPT
-                        st.header("📝 Opis wyników")
-                        
-                        # Przygotuj informacje o danych
-                        data_info = f"Zbiór zawiera {len(data)} wierszy i {len(data.columns)} kolumn. Typ problemu: {problem_type}."
-                        
-                        with st.spinner("🤖 Generuję opis przez ChatGPT..."):
-                            description = generate_description_with_gpt(importance_df, problem_type, target_column, data_info, openai_api_key)
-                            st.markdown(description)
-                        
-                    else:
-                        st.error(f"❌ {model}")
-                        
-        except Exception as e:
-            st.error(f"❌ Błąd podczas wczytywania pliku: {str(e)}")
+    return uploaded_file, api_key
+
+@st.cache_data
+def load_data(file) -> pd.DataFrame:
+    return pd.read_csv(file)
+
+def render_metrics(data: pd.DataFrame):
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Liczba wierszy", len(data))
+    col2.metric("Liczba kolumn", len(data.columns))
+    col3.metric("Brakujące dane", f"{data.isna().sum().sum()}")
+
+def main():
+    # 1. Inicjalizacja
+    langfuse_active = ConfigService.get_langfuse_config()
     
+    st.title("📊 Analiza Ważności Cech")
+    st.markdown("Aplikacja automatycznie trenuje modele ML i wyjaśnia wyniki przy użyciu **GPT-4o-mini**.")
+    
+    # 2. Panel boczny
+    uploaded_file, user_api_key = render_sidebar()
+    
+    # 3. Główna logika
+    if uploaded_file:
+        try:
+            df = load_data(uploaded_file)
+            
+            # Podgląd danych
+            with st.expander("🔍 Podgląd danych", expanded=True):
+                render_metrics(df)
+                st.dataframe(df.head(5), use_container_width=True)
+            
+            # Wybór celu
+            st.divider()
+            col_sel, col_btn = st.columns([3, 1])
+            with col_sel:
+                target_col = st.selectbox("Wybierz kolumnę docelową (Target):", df.columns)
+            
+            with col_btn:
+                st.write("") # Odstęp
+                st.write("") # Odstęp
+                start_btn = st.button("🚀 Rozpocznij Analizę", type="primary", use_container_width=True)
+            
+            if start_btn:
+                with st.spinner("⚙️ Przetwarzanie danych i trenowanie modeli..."):
+                    # Analiza
+                    problem_type = AnalysisService.determine_problem_type(df, target_col)
+                    st.info(f"Wykryty typ problemu: **{problem_type.upper()}**")
+                    
+                    imp_df, model_or_err = AnalysisService.run_analysis(df, target_col, problem_type)
+                    
+                    if imp_df is not None:
+                        # Wizualizacja
+                        col_chart, col_desc = st.columns([1, 1])
+                        
+                        with col_chart:
+                            st.subheader("📈 Wykres Ważności")
+                            fig = px.bar(
+                                imp_df.head(15),
+                                x='Importance',
+                                y='Feature',
+                                orientation='h',
+                                color='Importance',
+                                color_continuous_scale='Bluered_r'
+                            )
+                            fig.update_layout(yaxis={'categoryorder':'total ascending'})
+                            st.plotly_chart(fig, use_container_width=True)
+                            
+                            with st.expander("Pokaż tabelę danych"):
+                                st.dataframe(imp_df, use_container_width=True)
+
+                        with col_desc:
+                            # Opis AI
+                            client = ConfigService.get_openai_client(user_api_key, langfuse_active)
+                            data_info = f"Wierszy: {len(df)}, Kolumn: {len(df.columns)}"
+                            
+                            desc = OpenAIService.generate_description(
+                                client, imp_df, problem_type, target_col, data_info, langfuse_active
+                            )
+                            st.markdown(desc)
+                            
+                    else:
+                        st.error(f"Błąd analizy: {model_or_err}")
+
+        except Exception as e:
+            st.error(f"Nie udało się przetworzyć pliku: {str(e)}")
     else:
-        # Instrukcje dla użytkownika
-        st.info("👆 Wczytaj plik CSV z danymi, aby rozpocząć analizę")
-        
-        st.markdown("""
-        ## 🚀 Jak używać aplikacji:
-        
-        1. **Wczytaj dane** - użyj panelu po lewej stronie, aby wczytać plik CSV
-        2. **Wybierz kolumnę docelową** - określ, którą kolumnę chcesz przewidywać
-        3. **Rozpocznij analizę** - aplikacja automatycznie:
-           - Określi typ problemu (klasyfikacja/regresja)
-           - Zbuduje najlepszy model
-           - Wyświetli najważniejsze cechy
-           - Wygeneruje opis wyników przez ChatGPT 🤖
-        
-        ## 📋 Wymagania dla danych:
-        - Format CSV
-        - Co najmniej 10 wierszy danych
-        - Kolumny numeryczne lub kategoryczne
-        - Maksymalnie 70% wartości brakujących w kolumnach
-        
-        """)
+        st.info("👈 Wgraj plik CSV w panelu bocznym, aby rozpocząć.")
 
 if __name__ == "__main__":
-    # Streamlit automatycznie użyje PORT z --server.port w run command
-    # PORT jest ustawiany przez zmienną środowiskową $PORT w App Platform
     main()

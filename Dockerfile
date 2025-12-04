@@ -1,42 +1,31 @@
-# Użyj oficjalnego obrazu Python
-FROM python:3.11-slim
+FROM python:3.10-slim
 
-# Ustaw zmienne środowiskowe
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PIP_NO_CACHE_DIR=1
 
-# Utwórz katalog roboczy
-WORKDIR /app
-
-# Skopiuj pliki requirements
-COPY requirements.txt .
-
-# Zainstaluj zależności systemowe i Python
+# Instalacja zależności systemowych dla PyCaret (libgomp1 jest krytyczny)
 RUN apt-get update && apt-get install -y \
     build-essential \
     curl \
-    software-properties-common \
     git \
-    && pip install --upgrade pip \
-    && pip install -r requirements.txt \
+    libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Skopiuj resztę plików aplikacji
+WORKDIR /app
+
+COPY requirements.txt .
+
+# Instalacja bibliotek Python
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
+
 COPY . .
 
-# Utwórz użytkownika nie-root
-RUN useradd --create-home --shell /bin/bash app && \
-    chown -R app:app /app
-USER app
-
-# Ustaw port dla Streamlit
 EXPOSE 8501
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+# Healthcheck
+HEALTHCHECK --interval=30s --timeout=30s --start-period=30s --retries=3 \
     CMD curl --fail http://localhost:8501/_stcore/health || exit 1
 
-# Uruchom aplikację
 ENTRYPOINT ["streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0"]
