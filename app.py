@@ -2,6 +2,8 @@ import streamlit as st
 import pandas as pd
 import os
 import warnings
+import csv
+import io
 from typing import Tuple, Optional, Any
 
 # Imports for visualization
@@ -302,9 +304,145 @@ def render_sidebar():
     
     return uploaded_file, api_key
 
+def detect_delimiter(file) -> str:
+    """
+    Automatycznie wykrywa separator (delimiter) w pliku CSV.
+    Sprawdza typowe separatory: przecinek, średnik, tabulator, pipe.
+    Obsługuje różne kodowania tekstu.
+    """
+    # Resetujemy pozycję pliku
+    file.seek(0)
+    
+    # Czytamy pierwsze 2KB pliku do analizy
+    sample_bytes = file.read(2048)
+    file.seek(0)
+    
+    # Próbujemy zdekodować próbkę z różnymi kodowaniami
+    sample = None
+    encodings = ['utf-8', 'utf-8-sig', 'latin-1', 'cp1250', 'iso-8859-1']
+    
+    for encoding in encodings:
+        try:
+            sample = sample_bytes.decode(encoding)
+            break
+        except UnicodeDecodeError:
+            continue
+    
+    # Jeśli nie udało się zdekodować, używamy UTF-8 z obsługą błędów
+    if sample is None:
+        sample = sample_bytes.decode('utf-8', errors='ignore')
+    
+    # Używamy csv.Sniffer do wykrycia separatora
+    try:
+        sniffer = csv.Sniffer()
+        delimiter = sniffer.sniff(sample, delimiters=',;\t|').delimiter
+        return delimiter
+    except (csv.Error, UnicodeDecodeError):
+        # Fallback: próbujemy ręcznie wykryć najczęściej występujący separator
+        # Sprawdzamy które znaki występują najczęściej w pierwszym wierszu
+        first_line = sample.split('\n')[0] if sample else ''
+        
+        delimiters = [',', ';', '\t', '|']
+        delimiter_counts = {delim: first_line.count(delim) for delim in delimiters}
+        
+        # Wybieramy separator z największą liczbą wystąpień
+        detected = max(delimiter_counts.items(), key=lambda x: x[1])
+        
+        # Jeśli żaden separator nie został znaleziony lub wszystkie mają 0, używamy przecinka jako domyślnego
+        return detected[0] if detected[1] > 0 else ','
+
 @st.cache_data
 def load_data(file) -> pd.DataFrame:
-    return pd.read_csv(file)
+    """
+    Wczytuje dane CSV z automatycznym wykrywaniem separatora.
+    Obsługuje przecinki, średniki, tabulatory i pipe.
+    Automatycznie wykrywa kodowanie pliku.
+    """
+    delimiter = detect_delimiter(file)
+    
+    # Lista kodowań do wypróbowania
+    encodings = ['utf-8', 'utf-8-sig', 'latin-1', 'cp1250', 'iso-8859-1']
+    
+    # Resetujemy pozycję pliku przed wczytaniem
+    file.seek(0)
+    
+    # Sprawdzamy wersję pandas dla kompatybilności parametrów
+    pandas_version = pd.__version__
+    use_on_bad_lines = tuple(map(int, pandas_version.split('.'))) >= (1, 3, 0)
+    
+    # Próbujemy wczytać z wykrytym separatorem i różnymi kodowaniami
+    best_df = None
+    best_cols = 0
+    
+    for encoding in encodings:
+        file.seek(0)
+        try:
+            read_params = {
+                'delimiter': delimiter,
+                'encoding': encoding,
+                'engine': 'python',
+                'skipinitialspace': True
+            }
+            
+            # Dodajemy parametr on_bad_lines tylko dla pandas >= 1.3.0
+            if use_on_bad_lines:
+                read_params['on_bad_lines'] = 'skip'
+            
+            df = pd.read_csv(file, **read_params)
+            
+            # Wybieramy najlepszy wynik (najwięcej kolumn)
+            if len(df.columns) > best_cols:
+                best_df = df
+                best_cols = len(df.columns)
+                
+            # Jeśli mamy więcej niż jedną kolumnę, to prawdopodobnie prawidłowy separator
+            if len(df.columns) > 1:
+                break
+        except Exception:
+            continue
+    
+    # Jeśli wykryliśmy tylko jedną kolumnę, próbujemy z innymi separatorami
+    if best_cols == 1:
+        file.seek(0)
+        for alt_delimiter in [',', ';', '\t', '|']:
+            if alt_delimiter != delimiter:
+                for encoding in encodings:
+                    file.seek(0)
+                    try:
+                        read_params = {
+                            'delimiter': alt_delimiter,
+                            'encoding': encoding,
+                            'engine': 'python',
+                            'skipinitialspace': True
+                        }
+                        
+                        if use_on_bad_lines:
+                            read_params['on_bad_lines'] = 'skip'
+                        
+                        test_df = pd.read_csv(file, **read_params)
+                        if len(test_df.columns) > best_cols:
+                            best_df = test_df
+                            best_cols = len(test_df.columns)
+                            delimiter = alt_delimiter
+                            if best_cols > 1:
+                                break
+                    except Exception:
+                        continue
+                if best_cols > 1:
+                    break
+    
+    if best_df is None or best_cols == 0:
+        # Ostatnia próba z domyślnymi ustawieniami Pandas
+        file.seek(0)
+        try:
+            read_params = {'engine': 'python'}
+            if use_on_bad_lines:
+                read_params['on_bad_lines'] = 'skip'
+            return pd.read_csv(file, **read_params)
+        except Exception as e:
+            raise ValueError(f"Nie udało się odczytać pliku CSV. Sprawdź format pliku i separator. Błąd: {str(e)}")
+    
+    return best_df
 
 def render_metrics(data: pd.DataFrame):
     col1, col2, col3 = st.columns(3)
