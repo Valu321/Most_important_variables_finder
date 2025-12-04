@@ -1,10 +1,10 @@
-name: feature-analysis-app
+name: most-important-variables-finder
 region: fra
 
 services:
 - name: feature-analysis-service
   github:
-    # PODMIEŃ NA SWOJE DANE:
+    # PODMIEŃ 'YOUR_GITHUB_USERNAME' NA SWOJĄ NAZWĘ UŻYTKOWNIKA:
     repo: Valu321/Most_important_variables_finder
     branch: main
     deploy_on_push: true
