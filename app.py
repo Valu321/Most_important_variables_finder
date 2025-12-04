@@ -14,8 +14,38 @@ from pycaret import regression as pc_reg
 # OpenAI & Observability
 from dotenv import load_dotenv
 from openai import OpenAI
-from langfuse.decorators import langfuse_context, observe
-from langfuse.openai import openai as langfuse_openai
+
+# Optional Langfuse imports - gracefully handle if not available
+try:
+    # Try langfuse 3.0+ first (newer structure)
+    try:
+        from langfuse.openai import openai as langfuse_openai
+        # Try to import langfuse_context - may not exist in v3
+        try:
+            from langfuse.decorators import langfuse_context
+        except ImportError:
+            # In langfuse 3.0+, context might be accessed differently
+            # We'll handle this gracefully in the code
+            langfuse_context = None
+        LANGFUSE_AVAILABLE = True
+    except ImportError:
+        # Fallback to langfuse 2.x structure
+        try:
+            from langfuse.decorators import langfuse_context, observe
+            from langfuse.openai import openai as langfuse_openai
+            LANGFUSE_AVAILABLE = True
+        except ImportError:
+            # Langfuse not available at all
+            langfuse_context = None
+            observe = None
+            langfuse_openai = None
+            LANGFUSE_AVAILABLE = False
+except Exception:
+    # Any other error - set to unavailable
+    langfuse_context = None
+    observe = None
+    langfuse_openai = None
+    LANGFUSE_AVAILABLE = False
 
 # Suppress warnings
 warnings.filterwarnings('ignore')
@@ -36,12 +66,15 @@ class ConfigService:
     @staticmethod
     def get_langfuse_config() -> bool:
         """Sprawdza i konfiguruje Langfuse, jeśli dane uwierzytelniające są obecne."""
+        if not LANGFUSE_AVAILABLE or langfuse_openai is None:
+            return False
+        
         try:
             public_key = os.getenv('LANGFUSE_PUBLIC_KEY')
             secret_key = os.getenv('LANGFUSE_SECRET_KEY')
             host = os.getenv('LANGFUSE_HOST', 'https://cloud.langfuse.com')
             
-            if public_key and secret_key:
+            if public_key and secret_key and langfuse_openai:
                 langfuse_openai.langfuse.public_key = public_key
                 langfuse_openai.langfuse.secret_key = secret_key
                 langfuse_openai.langfuse.host = host
@@ -56,9 +89,13 @@ class ConfigService:
         if not api_key:
             return None
             
-        if langfuse_enabled:
-            langfuse_openai.api_key = api_key
-            return langfuse_openai
+        if langfuse_enabled and langfuse_openai is not None:
+            try:
+                langfuse_openai.api_key = api_key
+                return langfuse_openai
+            except Exception:
+                # Fallback to regular OpenAI client if langfuse fails
+                return OpenAI(api_key=api_key)
         else:
             return OpenAI(api_key=api_key)
 
@@ -196,15 +233,18 @@ class OpenAIService:
             """
 
             # Langfuse Trace
-            if langfuse_enabled:
-                langfuse_context.update_current_trace(
-                    name="generate_analysis_desc",
-                    metadata={
-                        "problem": problem_type, 
-                        "target": target_column,
-                        "model": "gpt-4o-mini"
-                    }
-                )
+            if langfuse_enabled and langfuse_context is not None:
+                try:
+                    langfuse_context.update_current_trace(
+                        name="generate_analysis_desc",
+                        metadata={
+                            "problem": problem_type, 
+                            "target": target_column,
+                            "model": "gpt-4o-mini"
+                        }
+                    )
+                except Exception:
+                    pass  # Silently fail if langfuse trace fails
 
             # Wywołanie API - GPT-4o-mini
             response = client.chat.completions.create(

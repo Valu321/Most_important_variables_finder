@@ -28,7 +28,7 @@ Kompleksowe narzędzie AutoML oparte na Streamlit i PyCaret, które automatyczni
 ### 1. Klonowanie repozytorium
 
 ```bash
-git clone https://github.com/twoj-uzytkownik/Most_important_variables_finder.git
+git clone https://github.com/Valu321/Most_important_variables_finder.git
 cd Most_important_variables_finder
 ```
 
