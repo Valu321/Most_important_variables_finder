@@ -80,3 +80,6 @@ ENV/
 pycaret_logs/
 logs.log
 *.log
+
+# Files to ignore
+DEPLOYMENT_GUIDE.md
