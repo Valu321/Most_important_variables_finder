@@ -5,7 +5,7 @@ services:
 - name: feature-analysis-service
   github:
     # PODMIEŃ NA SWOJE DANE:
-    repo: TWOJA_NAZWA_UZYTKOWNIKA/TWOJE_REPOZYTORIUM
+    repo: Valu321/Most_important_variables_finder
     branch: main
     deploy_on_push: true
   
