@@ -160,11 +160,11 @@ class OpenAIService:
             top_feature = importance_df.iloc[0]
             pct = (top_feature['Importance'] / importance_df['Importance'].sum()) * 100
             return f"""
-            ## ⚠️ Brak klucza API
+            ## ⚠️ Wymagany klucz API
             
-            Dostępny jest tylko tryb podstawowy. Wprowadź klucz OpenAI API, aby uzyskać pełny opis.
+            Aby wygenerować opis biznesowy, wprowadź swój klucz OpenAI API w panelu bocznym.
             
-            **Najważniejsza cecha:** {top_feature['Feature']} ({pct:.1f}%)
+            **Najważniejsza cecha (wykryta):** {top_feature['Feature']} ({pct:.1f}%)
             """
 
         try:
@@ -206,9 +206,9 @@ class OpenAIService:
                     }
                 )
 
-            # Wywołanie API - ZMIANA MODELU NA GPT-4o-mini
+            # Wywołanie API - GPT-4o-mini
             response = client.chat.completions.create(
-                model="gpt-4o-mini",  # <--- ZMIANA: Najnowszy, tani model
+                model="gpt-4o-mini",
                 messages=[
                     {"role": "system", "content": "Jesteś pomocnym analitykiem danych. Odpowiadasz w języku polskim."},
                     {"role": "user", "content": prompt}
@@ -233,14 +233,31 @@ def render_sidebar():
         help="Plik musi zawierać nagłówki kolumn."
     )
     
+    # 🛡️ ZABEZPIECZENIE: Limit wielkości pliku (10MB)
+    if uploaded_file is not None:
+        if uploaded_file.size > 10 * 1024 * 1024:
+            st.sidebar.error("🚨 Plik jest za duży! Maksymalnie 10MB.")
+            uploaded_file = None # Blokujemy dalsze przetwarzanie
+
     st.sidebar.divider()
     
+    # 🛡️ ZABEZPIECZENIE: Informacja o prywatności
+    st.sidebar.info(
+        "🔒 **Prywatność i RODO**\n\n"
+        "Aplikacja wykorzystuje OpenAI API do generowania opisów. "
+        "Nazwy kolumn Twoich danych będą przesyłane do zewnętrznego dostawcy. "
+        "**Nie wgrywaj plików zawierających dane poufne lub RODO.**"
+    )
+    
     st.sidebar.header("🔑 API")
+    
+    # 🛡️ ZABEZPIECZENIE: Model SaaS (Użytkownik podaje klucz)
+    # Pobieramy z env jako fallback, ale domyślnie w chmurze będzie pusto
     api_key = st.sidebar.text_input(
-        "OpenAI API Key",
+        "Twój klucz OpenAI API",
         type="password",
         value=os.getenv("OPENAI_API_KEY", ""),
-        help="Pozostaw puste jeśli ustawione w .env"
+        help="Wymagany do analizy AI. Wprowadź swój klucz, aby korzystać z GPT-4o-mini."
     )
     
     return uploaded_file, api_key

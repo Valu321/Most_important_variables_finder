@@ -14,7 +14,7 @@ W zaktualizowanym kodzie używamy modelu `gpt-4o-mini`, ponieważ:
 
 Upewnij się, że w głównym katalogu projektu na swoim komputerze masz następujące pliki:
 
-- `app.py`
+- `app.py` (zaktualizowany o zabezpieczenia)
 - `requirements.txt`
 - `Dockerfile`
 - `app.yaml` (zaktualizowany o Twoją nazwę repozytorium)
@@ -23,7 +23,7 @@ Zatwierdź wszystkie zmiany i wyślij je na GitHub:
 
 ```bash
 git add .
-git commit -m "Przygotowanie do wdrożenia: GPT-4o-mini + Docker"
+git commit -m "Przygotowanie do wdrożenia: GPT-4o-mini + Bezpieczeństwo SaaS"
 git push origin main
 ```
 
@@ -60,7 +60,7 @@ Przejdź na [cloud.langfuse.com](https://cloud.langfuse.com).
 
 DigitalOcean powinien automatycznie wykryć plik `app.yaml` lub `Dockerfile`.
 
-1. Kliknij **Edit Plan** przy nazwie swojego serwisu (domyślnie może to być nazwa repozytorium)
+1. Kliknij **Edit Plan** przy nazwie swojego serwisu
 
 ### Wybór Pamięci RAM (Krytyczne!)
 
@@ -71,33 +71,35 @@ DigitalOcean powinien automatycznie wykryć plik `app.yaml` lub `Dockerfile`.
 
 ## 🔑 KROK 5: Zmienne Środowiskowe (Secrets)
 
-W sekcji **"Environment Variables"** (podczas konfiguracji lub w ustawieniach aplikacji po utworzeniu) dodaj swoje klucze API.
+> **Model SaaS**: W tej wersji aplikacji przyjęliśmy model SaaS, gdzie użytkownik podaje własny klucz OpenAI w aplikacji.  
+> Dlatego **NIE ustawiamy `OPENAI_API_KEY`** po stronie serwera, aby uniknąć naliczania kosztów na Twoje konto.
 
-> **Ważne**: Kliknij **Encrypt** przy kluczach API, aby były bezpieczne.
+Dodaj tylko klucze monitoringu (Langfuse). Kliknij **Encrypt**, aby były bezpieczne.
 
-| Nazwa Zmiennej          | Wartość                                           | Typ        |
-|------------------------|---------------------------------------------------|------------|
-| `OPENAI_API_KEY`        | Twój klucz API OpenAI (zaczyna się od `sk-...`)  | Secret 🔒  |
-| `LANGFUSE_PUBLIC_KEY`   | Twój Public Key z Langfuse (z Kroku 2)           | Secret 🔒  |
-| `LANGFUSE_SECRET_KEY`   | Twój Secret Key z Langfuse (z Kroku 2)           | Secret 🔒  |
-| `LANGFUSE_HOST`         | `https://cloud.langfuse.com`                      | Plain Text |
-| `PORT`                  | `8501`                                            | Plain Text |
+| Nazwa Zmiennej          | Wartość                                           | Typ        | Uwagi                         |
+|------------------------|---------------------------------------------------|------------|-------------------------------|
+| `LANGFUSE_PUBLIC_KEY`   | Twój Public Key z Langfuse                        | Secret 🔒  | Wymagane                      |
+| `LANGFUSE_SECRET_KEY`   | Twój Secret Key z Langfuse                        | Secret 🔒  | Wymagane                      |
+| `LANGFUSE_HOST`         | `https://cloud.langfuse.com`                      | Plain Text | Wymagane                      |
+| `PORT`                  | `8501`                                            | Plain Text | Wymagane                      |
+| ~~`OPENAI_API_KEY`~~    | (Pomiń to pole)                                   | -          | Klucz podaje użytkownik w aplikacji |
 
 ## 🚀 KROK 6: Uruchomienie
 
 1. Kliknij **Next**, przejrzyj podsumowanie i na końcu kliknij **Create Resources**
-2. Wdrożenie potrwa kilka minut (budowanie kontenera z PyCaret jest czasochłonne, więc bądź cierpliwy)
-3. Po zakończeniu otrzymasz publiczny adres URL aplikacji w formacie:
-   ```
-   https://most-important-variables-finder-xxxxx.ondigitalocean.app
-   ```
+2. Wdrożenie potrwa kilka minut
+3. Po zakończeniu otrzymasz publiczny adres URL aplikacji
 
 ## 🛠️ Rozwiązywanie problemów
 
+### Błąd "Plik za duży"
+
+Aplikacja ma wbudowany limit **10MB** dla plików CSV, aby chronić serwer przed przeciążeniem pamięci (DoS).
+
 ### Deploy Error (Health Check Timeout)
 
-Jeśli aplikacja nie wstaje na czas (status "Unhealthy"), wejdź w zakładkę **Settings** → wybierz swój komponent → **Health Check** i zwiększ **Initial Delay** do **120 sekund**.
+Jeśli aplikacja nie wstaje na czas, zwiększ **Initial Delay** w sekcji **Health Check** do **120 sekund**.
 
-### Out of Memory (OOM) / Restartowanie się aplikacji
+### Out of Memory (OOM)
 
-Jeśli aplikacja pomyślnie się zbuduje, ale resetuje się podczas analizy danych, oznacza to brak pamięci RAM. W takim przypadku wejdź w **Settings** i zwiększ plan (**Instance Size**) na wersję z **2GB RAM**.
+Jeśli aplikacja resetuje się przy dużych plikach, zwiększ plan serwera na wersję z **2GB RAM**.
