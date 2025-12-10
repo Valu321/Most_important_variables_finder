@@ -5,7 +5,7 @@ import warnings
 import time
 import threading
 import gc
-from typing import Tuple, Optional, Any
+from typing import Tuple, Optional, Any, List
 
 # Imports for visualization
 import plotly.express as px
@@ -41,9 +41,32 @@ warnings.filterwarnings('ignore')
 st.set_page_config(
     page_title="Analiza Najważniejszych Cech (Powered by GPT-4o-mini)",
     page_icon="📊",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 load_dotenv()
+
+# --- CUSTOM CSS ---
+st.markdown("""
+    <style>
+    .block-container {
+        padding-top: 2rem;
+        padding-bottom: 2rem;
+    }
+    .stMetric {
+        background-color: #f0f2f6;
+        padding: 15px;
+        border-radius: 10px;
+        border: 1px solid #e0e0e0;
+    }
+    [data-testid="stSidebar"] {
+        background-color: #f8f9fa;
+    }
+    h1, h2, h3 {
+        font-family: 'Helvetica Neue', sans-serif;
+    }
+    </style>
+    """, unsafe_allow_html=True)
 
 # --- SERVICES ---
 
@@ -86,7 +109,7 @@ class MemoryMonitor:
     def start_background_monitoring(self, interval=1.0):
         """Uruchamia monitorowanie w tle."""
         if psutil is None:
-            st.warning("Biblioteka 'psutil' nie jest zainstalowana. Monitorowanie wyłączone.")
+            # Nie wyświetlamy ostrzeżenia, aby nie zaśmiecać UI, jeśli nie jest to krytyczne
             return
 
         self.running = True
@@ -362,8 +385,8 @@ class OpenAIService:
 
 # --- UI COMPONENTS ---
 
-def render_sidebar():
-    st.sidebar.header("📁 Dane i Konfiguracja")
+def render_sidebar(columns: List[str] = None):
+    st.sidebar.header("📁 Dane")
     uploaded_file = st.sidebar.file_uploader("Wgraj plik CSV (maks. 10MB)", type=['csv'])
     
     if uploaded_file is not None and uploaded_file.size > 10 * 1024 * 1024:
@@ -372,21 +395,43 @@ def render_sidebar():
 
     st.sidebar.divider()
     
+    # Sekcja konfiguracji analizy (widoczna tylko gdy plik wgrany)
+    target_col = None
+    problem_type_mode = "Auto"
+    
+    if columns:
+        st.sidebar.header("⚙️ Konfiguracja Analizy")
+        target_col = st.sidebar.selectbox("🎯 Kolumna Celu (Target):", columns)
+        
+        mode_options = {
+            "Automatyczny (Zalecane)": "Auto",
+            "Klasyfikacja (Ręczny)": "klasyfikacja",
+            "Regresja (Ręczny)": "regresja"
+        }
+        
+        selected_mode_label = st.sidebar.radio(
+            "Tryb modelu:",
+            list(mode_options.keys()),
+            help="Wybierz 'Auto', aby system sam wykrył typ problemu, lub wymuś konkretny algorytm."
+        )
+        problem_type_mode = mode_options[selected_mode_label]
+        
+        st.sidebar.divider()
+
     st.sidebar.warning(
-        "Aplikacja wykorzystuje OpenAI API do generowania opisów. "
-        "Nazwy kolumn Twoich danych będą przesyłane do zewnętrznego dostawcy. "
-        "Nie wgrywaj plików zawierających dane poufne lub RODO."
+        "Aplikacja wykorzystuje OpenAI API. Nazwy kolumn są przesyłane do zewnętrznego dostawcy. "
+        "Nie wgrywaj plików z danymi poufnymi (RODO)."
     )
     
-    st.sidebar.header("🔑 API")
-    
+    st.sidebar.header("🔑 API Key")
     api_key = st.sidebar.text_input(
-        "Twój klucz OpenAI API",
+        "Klucz OpenAI API",
         type="password",
-        value=os.getenv("OPENAI_API_KEY", "")
+        value=os.getenv("OPENAI_API_KEY", ""),
+        help="Wymagany do generowania opisów słownych."
     )
     
-    return uploaded_file, api_key
+    return uploaded_file, api_key, target_col, problem_type_mode
 
 @st.cache_data
 def load_data(file) -> pd.DataFrame:
@@ -406,88 +451,182 @@ def main():
     langfuse_active = ConfigService.get_langfuse_config()
     
     st.title("📊 Analiza Ważności Cech")
-    st.markdown("Automatyczna analiza ML + GPT-4o-mini.")
+    st.markdown("Automatyczna analiza ML wspierana przez AI. Wgraj dane, wybierz cel i poznaj kluczowe czynniki.")
     
-    uploaded_file, user_api_key = render_sidebar()
+    # 1. Najpierw pobieramy plik, aby móc załadować kolumny
+    # Wywołanie bez kolumn, aby wyrenderować górną część sidebaru
     
+    # Używamy tricku: renderujemy sidebar "na raty" lub po prostu wczytujemy plik wewnątrz main,
+    # a potem przekazujemy kolumny do sidebaru. Streamlit reruns script on change.
+    
+    # Placeholder na sidebar, który wypełnimy później lub prościej:
+    # Renderujemy sidebar w całości, ale część opcji jest warunkowa.
+    
+    # UWAGA: W Streamlit file_uploader musi być wywołany, byśmy mieli plik. 
+    # Więc najpierw wywołujemy sidebar (z pustą listą kolumn jeśli plik nie wgrany)
+    
+    # Aby to zrobić czysto, musimy podzielić logikę lub użyć session_state. 
+    # Tutaj uprościmy: Najpierw file uploader.
+    
+    st.sidebar.header("📁 Dane")
+    uploaded_file = st.sidebar.file_uploader("Wgraj plik CSV (maks. 10MB)", type=['csv'])
+    
+    # Reszta zmiennych
+    user_api_key = ""
+    target_col = None
+    problem_type_mode = "Auto"
+    
+    # Sprawdzamy plik
     if uploaded_file:
+        if uploaded_file.size > 10 * 1024 * 1024:
+            st.sidebar.error("🚨 Plik jest za duży! Maks. 10MB.")
+            uploaded_file = None
+        else:
+            # Wczytanie danych
+            try:
+                df_raw = load_data(uploaded_file)
+                columns = df_raw.columns.tolist()
+                
+                # --- DALSZA CZĘŚĆ SIDEBARU (KONFIGURACJA) ---
+                st.sidebar.divider()
+                st.sidebar.header("⚙️ Konfiguracja")
+                
+                target_col = st.sidebar.selectbox("🎯 Kolumna Celu (Target):", columns)
+                
+                mode_options = {
+                    "Automatyczny (Zalecane)": "Auto",
+                    "Klasyfikacja (Ręczny)": "klasyfikacja",
+                    "Regresja (Ręczny)": "regresja"
+                }
+                
+                selected_mode_label = st.sidebar.radio(
+                    "Tryb modelu:",
+                    list(mode_options.keys()),
+                    help="Wybierz 'Auto', aby system sam wykrył typ problemu."
+                )
+                problem_type_mode = mode_options[selected_mode_label]
+            except Exception as e:
+                st.error(f"Nie udało się wczytać pliku: {e}")
+                df_raw = None
+
+    # --- DALSZA CZĘŚĆ SIDEBARU (API I INFO) ---
+    st.sidebar.divider()
+    st.sidebar.warning(
+        "Nazwy kolumn są przesyłane do OpenAI. Nie wgrywaj danych RODO."
+    )
+    st.sidebar.header("🔑 API Key")
+    user_api_key = st.sidebar.text_input(
+        "Klucz OpenAI API",
+        type="password",
+        value=os.getenv("OPENAI_API_KEY", "")
+    )
+    
+    # --- GŁÓWNA CZĘŚĆ APLIKACJI ---
+    
+    if uploaded_file and 'df_raw' in locals() and df_raw is not None:
         try:
-            df_raw = load_data(uploaded_file)
-            
-            with st.spinner("🧹 Przetwarzanie wstępne..."):
+            # Preprocessing
+            with st.spinner("🧹 Analiza wstępna danych..."):
                 df, cleaning_logs = AnalysisService.preprocess_data(df_raw)
             
-            with st.expander("🛠️ Logi czyszczenia"):
-                st.text(cleaning_logs)
-
-            with st.expander("🔍 Podgląd danych", expanded=True):
+            # Karty metryk
+            with st.container():
+                st.subheader("🔍 Podgląd Danych")
                 render_metrics(df)
-                st.dataframe(df.head(5), use_container_width=True)
+                with st.expander("Pokaż próbkę danych i logi czyszczenia"):
+                    st.dataframe(df.head(5), use_container_width=True)
+                    st.text(cleaning_logs)
             
             st.divider()
-            col_sel, col_btn = st.columns([3, 1])
-            with col_sel:
-                target_col = st.selectbox("Cel (Target):", df.columns)
             
+            # Przycisk startu (teraz duży i wyraźny)
+            col_spacer, col_btn, col_spacer2 = st.columns([1, 2, 1])
             with col_btn:
-                st.write("")
-                st.write("")
-                start_btn = st.button("🚀 Start", type="primary", use_container_width=True)
+                start_btn = st.button("🚀 Rozpocznij Analizę", type="primary", use_container_width=True)
             
             if start_btn:
-                # --- PRZYGOTOWANIE MONITORA PAMIĘCI ---
-                st.markdown("### 🔍 Diagnostyka Procesu")
-                mem_col1, mem_col2 = st.columns([1, 2])
-                with mem_col1:
-                    status_placeholder = st.empty()
-                    status_placeholder.info("Przygotowywanie środowiska...")
-                with mem_col2:
-                    chart_placeholder = st.empty()
+                if not target_col:
+                    st.error("Proszę wybrać kolumnę celu w panelu bocznym.")
+                else:
+                    # Monitor Pamięci Start
+                    st.markdown("### 🧬 Przebieg Procesu")
+                    mem_col1, mem_col2 = st.columns([1, 2])
+                    with mem_col1:
+                        status_box = st.empty()
+                        status_box.info("Inicjalizacja środowiska...")
+                    with mem_col2:
+                        chart_box = st.empty()
 
-                monitor = MemoryMonitor(chart_placeholder, status_placeholder)
-                monitor.start_background_monitoring(interval=1.0)
-                # --------------------------------------
+                    monitor = MemoryMonitor(chart_box, status_box)
+                    monitor.start_background_monitoring(interval=1.0)
 
-                try:
-                    with st.spinner("⚙️ Trenowanie modelu (Może to zająć chwilę)..."):
-                        problem_type = AnalysisService.determine_problem_type(df, target_col)
-                        st.info(f"Typ problemu: **{problem_type.upper()}**")
-                        
-                        imp_df, model_or_err = AnalysisService.run_analysis(df, target_col, problem_type)
-                        
-                        if imp_df is not None:
-                            # Zatrzymujemy monitor przed wyświetleniem wyników
+                    try:
+                        with st.spinner("⚙️ Trenowanie modeli (Może to potrwać 1-2 minuty)..."):
+                            # Decyzja o typie problemu
+                            if problem_type_mode == "Auto":
+                                problem_type = AnalysisService.determine_problem_type(df, target_col)
+                                st.info(f"System wykrył typ problemu: **{problem_type.upper()}**")
+                            else:
+                                problem_type = problem_type_mode
+                                st.info(f"Użyto trybu ręcznego: **{problem_type.upper()}**")
+                            
+                            # Uruchomienie PyCaret
+                            imp_df, model_or_err = AnalysisService.run_analysis(df, target_col, problem_type)
+                            
                             monitor.stop_background_monitoring()
-                            status_placeholder.success("Trening zakończony!")
-
-                            col_chart, col_desc = st.columns([1, 1])
-                            with col_chart:
-                                st.subheader("📈 Wykres")
-                                fig = px.bar(imp_df.head(15), x='Importance', y='Feature', orientation='h', color='Importance')
-                                fig.update_layout(yaxis={'categoryorder':'total ascending'})
-                                st.plotly_chart(fig, use_container_width=True)
+                            
+                            if imp_df is not None:
+                                status_box.success("✅ Analiza zakończona sukcesem!")
                                 
-                            with col_desc:
-                                client = ConfigService.get_openai_client(user_api_key, langfuse_active)
-                                data_info = f"Wierszy: {len(df)}"
-                                desc = OpenAIService.generate_description(client, imp_df, problem_type, target_col, data_info, langfuse_active)
-                                st.markdown(desc)
-                        else:
-                            monitor.stop_background_monitoring()
-                            st.error(f"Błąd: {model_or_err}")
+                                st.divider()
+                                res_col1, res_col2 = st.columns([1.2, 1])
+                                
+                                with res_col1:
+                                    st.subheader("📈 Ranking Cech")
+                                    fig = px.bar(
+                                        imp_df.head(15), 
+                                        x='Importance', 
+                                        y='Feature', 
+                                        orientation='h', 
+                                        color='Importance',
+                                        color_continuous_scale='Viridis',
+                                        title=None
+                                    )
+                                    fig.update_layout(
+                                        yaxis={'categoryorder':'total ascending'},
+                                        margin=dict(l=0, r=0, t=0, b=0)
+                                    )
+                                    st.plotly_chart(fig, use_container_width=True)
+                                    
+                                with res_col2:
+                                    st.subheader("📝 Wnioski Biznesowe")
+                                    client = ConfigService.get_openai_client(user_api_key, langfuse_active)
+                                    data_info = f"Wierszy: {len(df)}, Kolumny: {len(df.columns)}"
+                                    
+                                    with st.spinner("🤖 Generowanie opisu AI..."):
+                                        desc = OpenAIService.generate_description(
+                                            client, imp_df, problem_type, target_col, data_info, langfuse_active
+                                        )
+                                    
+                                    st.markdown(desc)
+                                    
+                            else:
+                                status_box.error("Błąd podczas treningu.")
+                                st.error(f"Szczegóły błędu: {model_or_err}")
 
-                except Exception as e:
-                    monitor.stop_background_monitoring()
-                    st.error(f"Krytyczny błąd aplikacji: {str(e)}")
-                
-                finally:
-                    # Upewniamy się, że wątek został zabity
-                    monitor.stop_background_monitoring()
+                    except Exception as e:
+                        monitor.stop_background_monitoring()
+                        st.error(f"Krytyczny błąd aplikacji: {str(e)}")
+                    finally:
+                        monitor.stop_background_monitoring()
 
         except Exception as e:
-            st.error(f"Błąd pliku: {str(e)}")
+            st.error(f"Błąd przetwarzania pliku: {str(e)}")
     else:
-        st.info("👈 Wgraj plik CSV.")
+        # Stan pusty (landing page state)
+        st.info("👈 Rozpocznij od wgrania pliku CSV w panelu bocznym.")
+        
+        # Opcjonalnie: Demo data button (można dodać w przyszłości)
 
 if __name__ == "__main__":
     main()
