@@ -2,8 +2,6 @@ import streamlit as st
 import pandas as pd
 import os
 import warnings
-import csv
-import io
 from typing import Tuple, Optional, Any
 
 # Imports for visualization
@@ -16,38 +14,8 @@ from pycaret import regression as pc_reg
 # OpenAI & Observability
 from dotenv import load_dotenv
 from openai import OpenAI
-
-# Optional Langfuse imports - gracefully handle if not available
-try:
-    # Try langfuse 3.0+ first (newer structure)
-    try:
-        from langfuse.openai import openai as langfuse_openai
-        # Try to import langfuse_context - may not exist in v3
-        try:
-            from langfuse.decorators import langfuse_context
-        except ImportError:
-            # In langfuse 3.0+, context might be accessed differently
-            # We'll handle this gracefully in the code
-            langfuse_context = None
-        LANGFUSE_AVAILABLE = True
-    except ImportError:
-        # Fallback to langfuse 2.x structure
-        try:
-            from langfuse.decorators import langfuse_context, observe
-            from langfuse.openai import openai as langfuse_openai
-            LANGFUSE_AVAILABLE = True
-        except ImportError:
-            # Langfuse not available at all
-            langfuse_context = None
-            observe = None
-            langfuse_openai = None
-            LANGFUSE_AVAILABLE = False
-except Exception:
-    # Any other error - set to unavailable
-    langfuse_context = None
-    observe = None
-    langfuse_openai = None
-    LANGFUSE_AVAILABLE = False
+from langfuse.decorators import langfuse_context, observe
+from langfuse.openai import openai as langfuse_openai
 
 # Suppress warnings
 warnings.filterwarnings('ignore')
@@ -68,15 +36,12 @@ class ConfigService:
     @staticmethod
     def get_langfuse_config() -> bool:
         """Sprawdza i konfiguruje Langfuse, jeśli dane uwierzytelniające są obecne."""
-        if not LANGFUSE_AVAILABLE or langfuse_openai is None:
-            return False
-        
         try:
             public_key = os.getenv('LANGFUSE_PUBLIC_KEY')
             secret_key = os.getenv('LANGFUSE_SECRET_KEY')
             host = os.getenv('LANGFUSE_HOST', 'https://cloud.langfuse.com')
             
-            if public_key and secret_key and langfuse_openai:
+            if public_key and secret_key:
                 langfuse_openai.langfuse.public_key = public_key
                 langfuse_openai.langfuse.secret_key = secret_key
                 langfuse_openai.langfuse.host = host
@@ -91,18 +56,72 @@ class ConfigService:
         if not api_key:
             return None
             
-        if langfuse_enabled and langfuse_openai is not None:
-            try:
-                langfuse_openai.api_key = api_key
-                return langfuse_openai
-            except Exception:
-                # Fallback to regular OpenAI client if langfuse fails
-                return OpenAI(api_key=api_key)
+        if langfuse_enabled:
+            langfuse_openai.api_key = api_key
+            return langfuse_openai
         else:
             return OpenAI(api_key=api_key)
 
 class AnalysisService:
     """Obsługuje logikę analizy danych przy użyciu PyCaret."""
+
+    @staticmethod
+    def preprocess_data(data: pd.DataFrame) -> Tuple[pd.DataFrame, str]:
+        """
+        Zaawansowany pipeline czyszczący dane, dedykowany m.in. wynikom sportowym.
+        1. Obsługuje separatory (średniki).
+        2. Zamienia znaczniki DNS/DNF na NaN.
+        3. Konwertuje czasy (HH:MM:SS) na sekundy.
+        4. Naprawia kolumny numeryczne 'zanieczyszczone' tekstem.
+        """
+        data = data.copy()
+        logs = []
+
+        # 1. Obsługa wartości specjalnych (DNS, DNF, etc.)
+        special_markers = ['DNS', 'DNF', 'DSQ', 'NM', 'DQ', 'dns', 'dnf']
+        # Zamień na NaN, ale tylko w kolumnach, które mogą być numeryczne
+        data.replace(special_markers, pd.NA, inplace=True)
+        
+        # 2. Inteligentna konwersja kolumn
+        for col in data.columns:
+            if data[col].dtype == 'object':
+                sample = data[col].dropna().astype(str)
+                if len(sample) == 0:
+                    continue
+
+                # A. Konwersja Czasu (HH:MM:SS lub MM:SS) na sekundy
+                # Sprawdzamy czy większość wartości pasuje do formatu czasu
+                is_time = sample.str.match(r'^(\d{1,2}:)?\d{1,2}:\d{2}(\.\d+)?$').mean() > 0.5
+                
+                if is_time:
+                    try:
+                        # pd.to_timedelta wymaga formatu HH:MM:SS, jeśli jest MM:SS dodajemy 00:
+                        temp_col = pd.to_timedelta(data[col].astype(str), errors='coerce')
+                        
+                        # Jeśli to_timedelta zwróciło dużo NaT, a regex pasował, może format był dziwny
+                        # Ale dla standardowych formatów zadziała.
+                        if temp_col.notna().sum() > 0.1 * len(data):
+                            data[f"{col} (sec)"] = temp_col.dt.total_seconds()
+                            # Opcjonalnie: Usuwamy oryginalną kolumnę tekstową lub zostawiamy
+                            # PyCaret lepiej poradzi sobie z (sec).
+                            # Zastępujemy oryginał dla uproszczenia wyboru targetu
+                            data[col] = temp_col.dt.total_seconds()
+                            logs.append(f"⏱️ Zkonwertowano czas '{col}' na sekundy.")
+                            continue
+                    except Exception:
+                        pass
+
+                # B. Forsowanie typów numerycznych (np. gdy kolumna ma liczby i 'DNS')
+                try:
+                    numeric_col = pd.to_numeric(data[col], errors='coerce')
+                    # Jeśli po konwersji mamy > 50% liczb (a reszta to np. NaN po DNS), to jest to kolumna liczbowa
+                    if numeric_col.notna().sum() > 0.5 * len(data):
+                        data[col] = numeric_col
+                        logs.append(f"🔢 Naprawiono typ numeryczny w kolumnie '{col}'.")
+                except:
+                    pass
+
+        return data, "\n\n".join(logs) if logs else "Brak specjalnych transformacji."
 
     @staticmethod
     def determine_problem_type(data: pd.DataFrame, target_column: str) -> str:
@@ -130,15 +149,29 @@ class AnalysisService:
         """
         Uruchamia potok analizy PyCaret.
         """
-        # 1. Czyszczenie danych
-        data_clean = data.dropna(thresh=len(data) * 0.7, axis=1) # Usuń rzadkie kolumny
-        data_clean = data_clean.dropna() # Usuń wiersze z brakami
+        # 1. Podstawowe czyszczenie danych (wiersze i kolumny z brakami)
+        # Zwiększamy tolerancję na braki danych w kolumnach, bo po 'preprocess_data' możemy mieć NaN zamiast DNS
+        data_clean = data.dropna(thresh=len(data) * 0.6, axis=1) 
+        data_clean = data_clean.dropna(subset=[target_column]) # Target musi być obecny
+        
+        # Opcjonalnie: imputacja prostym usunięciem wierszy dla szybkości demo
+        data_clean = data_clean.dropna()
         
         if target_column not in data_clean.columns:
             return None, f"Kolumna docelowa '{target_column}' została usunięta (zbyt wiele braków danych)."
             
+        # --- FIX: Usunięcie rzadkich klas (błąd PyCaret) ---
+        if problem_type == "klasyfikacja":
+            class_counts = data_clean[target_column].value_counts()
+            rare_classes = class_counts[class_counts < 2].index.tolist()
+            
+            if rare_classes:
+                st.warning(f"⚠️ Usunięto wiersze z rzadkimi klasami (występującymi tylko raz): {rare_classes}")
+                data_clean = data_clean[~data_clean[target_column].isin(rare_classes)]
+        # ---------------------------------------------------
+
         if len(data_clean) < 10:
-            return None, "Za mało danych po czyszczeniu (wymagane min. 10 wierszy)."
+            return None, "Za mało danych po czyszczeniu (wymagane min. 10 wierszy i min. 2 przykłady na klasę)."
 
         # 2. Wybór modułu PyCaret
         module = pc_clf if problem_type == "klasyfikacja" else pc_reg
@@ -150,18 +183,17 @@ class AnalysisService:
                 target=target_column,
                 session_id=123,
                 verbose=False,
-                html=False
+                html=False,
+                imputation_type='simple' # Dodatkowe zabezpieczenie
             )
             
             # 4. Trenowanie i porównanie modeli
-            # Używamy lekkich modeli dla szybkości w demo
             best_model = module.compare_models(
                 include=['rf', 'xgboost', 'lightgbm'], 
                 verbose=False
             )
             
             # 5. Ekstrakcja ważności cech
-            # Pobierz nazwy cech po transformacji
             X_transformed = module.get_config('X_train_transformed')
             feature_names = X_transformed.columns
             
@@ -180,7 +212,7 @@ class AnalysisService:
             return importance_df, best_model
 
         except Exception as e:
-            return None, f"Błąd PyCaret: {str(e)}"
+            return None, f"Błąd wewnętrzny PyCaret: {str(e)}"
 
 class OpenAIService:
     """Obsługuje generowanie tekstu przy użyciu OpenAI."""
@@ -229,24 +261,21 @@ class OpenAIService:
             Stwórz zwięzły raport biznesowy w Markdown.
             1. Zidentyfikuj kluczowe czynniki (drivers).
             2. Postaw hipotezy dlaczego te cechy są ważne.
-            3. Zasugeruj konkretne działania biznesowe.
+            3. Zasugeruj konkretne działania biznesowe lub wnioski analityczne.
             
             Styl: Profesjonalny, zwięzły, konkretny.
             """
 
             # Langfuse Trace
-            if langfuse_enabled and langfuse_context is not None:
-                try:
-                    langfuse_context.update_current_trace(
-                        name="generate_analysis_desc",
-                        metadata={
-                            "problem": problem_type, 
-                            "target": target_column,
-                            "model": "gpt-4o-mini"
-                        }
-                    )
-                except Exception:
-                    pass  # Silently fail if langfuse trace fails
+            if langfuse_enabled:
+                langfuse_context.update_current_trace(
+                    name="generate_analysis_desc",
+                    metadata={
+                        "problem": problem_type, 
+                        "target": target_column,
+                        "model": "gpt-4o-mini"
+                    }
+                )
 
             # Wywołanie API - GPT-4o-mini
             response = client.chat.completions.create(
@@ -294,7 +323,6 @@ def render_sidebar():
     st.sidebar.header("🔑 API")
     
     # 🛡️ ZABEZPIECZENIE: Model SaaS (Użytkownik podaje klucz)
-    # Pobieramy z env jako fallback, ale domyślnie w chmurze będzie pusto
     api_key = st.sidebar.text_input(
         "Twój klucz OpenAI API",
         type="password",
@@ -304,145 +332,16 @@ def render_sidebar():
     
     return uploaded_file, api_key
 
-def detect_delimiter(file) -> str:
-    """
-    Automatycznie wykrywa separator (delimiter) w pliku CSV.
-    Sprawdza typowe separatory: przecinek, średnik, tabulator, pipe.
-    Obsługuje różne kodowania tekstu.
-    """
-    # Resetujemy pozycję pliku
-    file.seek(0)
-    
-    # Czytamy pierwsze 2KB pliku do analizy
-    sample_bytes = file.read(2048)
-    file.seek(0)
-    
-    # Próbujemy zdekodować próbkę z różnymi kodowaniami
-    sample = None
-    encodings = ['utf-8', 'utf-8-sig', 'latin-1', 'cp1250', 'iso-8859-1']
-    
-    for encoding in encodings:
-        try:
-            sample = sample_bytes.decode(encoding)
-            break
-        except UnicodeDecodeError:
-            continue
-    
-    # Jeśli nie udało się zdekodować, używamy UTF-8 z obsługą błędów
-    if sample is None:
-        sample = sample_bytes.decode('utf-8', errors='ignore')
-    
-    # Używamy csv.Sniffer do wykrycia separatora
-    try:
-        sniffer = csv.Sniffer()
-        delimiter = sniffer.sniff(sample, delimiters=',;\t|').delimiter
-        return delimiter
-    except (csv.Error, UnicodeDecodeError):
-        # Fallback: próbujemy ręcznie wykryć najczęściej występujący separator
-        # Sprawdzamy które znaki występują najczęściej w pierwszym wierszu
-        first_line = sample.split('\n')[0] if sample else ''
-        
-        delimiters = [',', ';', '\t', '|']
-        delimiter_counts = {delim: first_line.count(delim) for delim in delimiters}
-        
-        # Wybieramy separator z największą liczbą wystąpień
-        detected = max(delimiter_counts.items(), key=lambda x: x[1])
-        
-        # Jeśli żaden separator nie został znaleziony lub wszystkie mają 0, używamy przecinka jako domyślnego
-        return detected[0] if detected[1] > 0 else ','
-
 @st.cache_data
 def load_data(file) -> pd.DataFrame:
-    """
-    Wczytuje dane CSV z automatycznym wykrywaniem separatora.
-    Obsługuje przecinki, średniki, tabulatory i pipe.
-    Automatycznie wykrywa kodowanie pliku.
-    """
-    delimiter = detect_delimiter(file)
-    
-    # Lista kodowań do wypróbowania
-    encodings = ['utf-8', 'utf-8-sig', 'latin-1', 'cp1250', 'iso-8859-1']
-    
-    # Resetujemy pozycję pliku przed wczytaniem
-    file.seek(0)
-    
-    # Sprawdzamy wersję pandas dla kompatybilności parametrów
-    pandas_version = pd.__version__
-    use_on_bad_lines = tuple(map(int, pandas_version.split('.'))) >= (1, 3, 0)
-    
-    # Próbujemy wczytać z wykrytym separatorem i różnymi kodowaniami
-    best_df = None
-    best_cols = 0
-    
-    for encoding in encodings:
+    # Inteligentne ładowanie: próba wykrycia separatora
+    try:
+        # engine='python' pozwala na autodetekcję separatora
+        return pd.read_csv(file, sep=None, engine='python')
+    except:
+        # Fallback do domyślnego
         file.seek(0)
-        try:
-            read_params = {
-                'delimiter': delimiter,
-                'encoding': encoding,
-                'engine': 'python',
-                'skipinitialspace': True
-            }
-            
-            # Dodajemy parametr on_bad_lines tylko dla pandas >= 1.3.0
-            if use_on_bad_lines:
-                read_params['on_bad_lines'] = 'skip'
-            
-            df = pd.read_csv(file, **read_params)
-            
-            # Wybieramy najlepszy wynik (najwięcej kolumn)
-            if len(df.columns) > best_cols:
-                best_df = df
-                best_cols = len(df.columns)
-                
-            # Jeśli mamy więcej niż jedną kolumnę, to prawdopodobnie prawidłowy separator
-            if len(df.columns) > 1:
-                break
-        except Exception:
-            continue
-    
-    # Jeśli wykryliśmy tylko jedną kolumnę, próbujemy z innymi separatorami
-    if best_cols == 1:
-        file.seek(0)
-        for alt_delimiter in [',', ';', '\t', '|']:
-            if alt_delimiter != delimiter:
-                for encoding in encodings:
-                    file.seek(0)
-                    try:
-                        read_params = {
-                            'delimiter': alt_delimiter,
-                            'encoding': encoding,
-                            'engine': 'python',
-                            'skipinitialspace': True
-                        }
-                        
-                        if use_on_bad_lines:
-                            read_params['on_bad_lines'] = 'skip'
-                        
-                        test_df = pd.read_csv(file, **read_params)
-                        if len(test_df.columns) > best_cols:
-                            best_df = test_df
-                            best_cols = len(test_df.columns)
-                            delimiter = alt_delimiter
-                            if best_cols > 1:
-                                break
-                    except Exception:
-                        continue
-                if best_cols > 1:
-                    break
-    
-    if best_df is None or best_cols == 0:
-        # Ostatnia próba z domyślnymi ustawieniami Pandas
-        file.seek(0)
-        try:
-            read_params = {'engine': 'python'}
-            if use_on_bad_lines:
-                read_params['on_bad_lines'] = 'skip'
-            return pd.read_csv(file, **read_params)
-        except Exception as e:
-            raise ValueError(f"Nie udało się odczytać pliku CSV. Sprawdź format pliku i separator. Błąd: {str(e)}")
-    
-    return best_df
+        return pd.read_csv(file)
 
 def render_metrics(data: pd.DataFrame):
     col1, col2, col3 = st.columns(3)
@@ -463,10 +362,20 @@ def main():
     # 3. Główna logika
     if uploaded_file:
         try:
-            df = load_data(uploaded_file)
+            df_raw = load_data(uploaded_file)
             
+            # === NOWY KROK: PREPROCESSING ===
+            # Wykonujemy czyszczenie zaraz po załadowaniu
+            with st.spinner("🧹 Oczyszczanie danych (konwersja czasu, obsługa błędów)..."):
+                df, cleaning_logs = AnalysisService.preprocess_data(df_raw)
+            
+            # Wyświetlenie logów czyszczenia w expanderze
+            with st.expander("🛠️ Logi czyszczenia danych (Kliknij, aby zobaczyć szczegóły)"):
+                st.text(cleaning_logs)
+            # ===============================
+
             # Podgląd danych
-            with st.expander("🔍 Podgląd danych", expanded=True):
+            with st.expander("🔍 Podgląd danych (po oczyszczeniu)", expanded=True):
                 render_metrics(df)
                 st.dataframe(df.head(5), use_container_width=True)
             
