@@ -124,13 +124,20 @@ class AnalysisService:
         unique_values = target_data.nunique(dropna=True)
         total_values = len(target_data)
         
+        # 1. Sprawdzenie czy dane są numeryczne
+        numeric_data = pd.to_numeric(target_data, errors='coerce')
+        is_mostly_numeric = numeric_data.isna().mean() < 0.1
+
+        # 2. Jeśli dane są numeryczne i mają dużo unikalnych wartości (np. > 20), to raczej regresja
+        if is_mostly_numeric and unique_values > 20:
+            return "regresja"
+        
+        # 3. Jeśli mało unikalnych wartości (np. mniej niż 20% danych), to klasyfikacja
         if total_values > 0 and unique_values / total_values < 0.2:
             return "klasyfikacja"
 
-        numeric_data = pd.to_numeric(target_data, errors='coerce')
-        non_numeric_ratio = numeric_data.isna().mean()
-        
-        if non_numeric_ratio < 0.1:
+        # Fallback: jeśli numeryczne -> regresja, w przeciwnym razie klasyfikacja
+        if is_mostly_numeric:
             return "regresja"
 
         return "klasyfikacja"
@@ -142,23 +149,40 @@ class AnalysisService:
         # 1. Podstawowe czyszczenie
         data_clean = data.dropna(thresh=len(data) * 0.6, axis=1) 
         data_clean = data_clean.dropna(subset=[target_column])
+        
+        # Usuwamy wiersze gdzie target nie jest znany (dla pewności)
+        if problem_type == "regresja":
+             data_clean = data_clean[pd.to_numeric(data_clean[target_column], errors='coerce').notna()]
+        
         data_clean = data_clean.dropna() # Szybka imputacja przez usunięcie
         
         if target_column not in data_clean.columns:
             return None, f"Kolumna docelowa '{target_column}' została usunięta."
             
-        # --- FIX: Usunięcie rzadkich klas ---
+        # --- SAFETY GUARD: Inteligentna obsługa rzadkich klas ---
+        # Jeśli PyCaret wykryje rzadkie klasy w problemie, który wygląda na klasyfikację,
+        # ale jest to np. ranking (1, 2, 3...), usunięcie klas wyczyści cały dataset.
         if problem_type == "klasyfikacja":
             class_counts = data_clean[target_column].value_counts()
             rare_classes = class_counts[class_counts < 2].index.tolist()
+            
             if rare_classes:
-                st.warning(f"⚠️ Usunięto rzadkie klasy: {rare_classes}")
-                data_clean = data_clean[~data_clean[target_column].isin(rare_classes)]
-        # ------------------------------------
+                rows_before = len(data_clean)
+                rows_after_filter = len(data_clean[~data_clean[target_column].isin(rare_classes)])
+                
+                # Jeśli usunięcie rzadkich klas kasuje więcej niż 30% danych lub zostawia mniej niż 10 wierszy
+                if rows_after_filter < 10 or (rows_after_filter / rows_before) < 0.7:
+                    st.warning(f"⚠️ Wykryto bardzo dużą liczbę unikalnych wartości dla Klasyfikacji (np. ranking). Przełączam tryb na **Regresję**, aby nie tracić danych.")
+                    problem_type = "regresja"
+                else:
+                    st.warning(f"⚠️ Usunięto rzadkie klasy (występujące tylko raz): {len(rare_classes)} przypadków.")
+                    data_clean = data_clean[~data_clean[target_column].isin(rare_classes)]
+        # --------------------------------------------------------
 
         if len(data_clean) < 10:
-            return None, "Za mało danych po czyszczeniu (min. 10 wierszy)."
+            return None, f"Za mało danych po czyszczeniu (zostało {len(data_clean)} wierszy, wymagane min. 10)."
 
+        # Wybór modułu po ewentualnej zmianie problem_type przez Safety Guard
         module = pc_clf if problem_type == "klasyfikacja" else pc_reg
 
         try:
@@ -171,11 +195,15 @@ class AnalysisService:
                 imputation_type='simple'
             )
             
+            # Trenowanie lekkich modeli dla szybkości
             best_model = module.compare_models(
-                include=['rf', 'xgboost', 'lightgbm'], 
+                include=['rf', 'dt', 'lightgbm'], 
                 verbose=False
             )
             
+            if best_model is None:
+                return None, "Nie udało się wytrenować żadnego modelu (sprawdź jakość danych)."
+
             X_transformed = module.get_config('X_train_transformed')
             feature_names = X_transformed.columns
             
@@ -183,9 +211,16 @@ class AnalysisService:
             if hasattr(best_model, 'feature_importances_'):
                  importances = best_model.feature_importances_
             
+            # Fallback dla modeli bez feature_importances_ (np. liniowe w regresji)
+            elif hasattr(best_model, 'coef_'):
+                 importances = abs(best_model.coef_)
+                 if len(importances.shape) > 1: # Dla multiclass
+                     importances = importances.mean(axis=0)
+
             if len(feature_names) != len(importances):
-                # Fallback w przypadku niedopasowania (np. pipeline przetworzył cechy inaczej)
-                return None, "Niezgodność wymiarów cech."
+                # Fallback w przypadku niedopasowania (rzadki przypadek preprocessingu PyCaret)
+                # Zwracamy puste, ale poprawne strukturalnie
+                return pd.DataFrame({'Feature': feature_names[:len(importances)], 'Importance': importances}), best_model
 
             importance_df = pd.DataFrame({
                 'Feature': feature_names,
