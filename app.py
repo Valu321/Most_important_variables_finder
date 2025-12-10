@@ -364,14 +364,20 @@ class OpenAIService:
 
 def render_sidebar():
     st.sidebar.header("📁 Dane i Konfiguracja")
-    uploaded_file = st.sidebar.file_uploader("Wgraj plik CSV", type=['csv'])
+    uploaded_file = st.sidebar.file_uploader("Wgraj plik CSV (maks. 10MB)", type=['csv'])
     
     if uploaded_file is not None and uploaded_file.size > 10 * 1024 * 1024:
         st.sidebar.error("🚨 Plik jest za duży! Maks. 10MB.")
         uploaded_file = None
 
     st.sidebar.divider()
-    st.sidebar.info("🔒 Dane są wysyłane do OpenAI w celu analizy.")
+    
+    st.sidebar.warning(
+        "Aplikacja wykorzystuje OpenAI API do generowania opisów. "
+        "Nazwy kolumn Twoich danych będą przesyłane do zewnętrznego dostawcy. "
+        "Nie wgrywaj plików zawierających dane poufne lub RODO."
+    )
+    
     st.sidebar.header("🔑 API")
     
     api_key = st.sidebar.text_input(
