@@ -85,3 +85,4 @@ logs.log
 DEPLOYMENT_GUIDE.md
 app_copy.py
 requirements_copy.txt
+*.jpg

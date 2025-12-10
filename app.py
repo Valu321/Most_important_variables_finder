@@ -53,15 +53,17 @@ st.markdown("""
         padding-top: 2rem;
         padding-bottom: 2rem;
     }
+    /* Poprawka dla kart metryk - kompatybilność z trybem ciemnym */
     .stMetric {
-        background-color: #f0f2f6;
+        background-color: rgba(255, 255, 255, 0.05); /* Półprzezroczyste tło */
         padding: 15px;
         border-radius: 10px;
-        border: 1px solid #e0e0e0;
+        border: 1px solid rgba(255, 255, 255, 0.1);
     }
-    [data-testid="stSidebar"] {
-        background-color: #f8f9fa;
-    }
+    /* Usunięto wymuszenie jasnego tła dla sidebaru, aby pasował do motywu */
+    /* [data-testid="stSidebar"] {
+        background-color: #f8f9fa; 
+    } */
     h1, h2, h3 {
         font-family: 'Helvetica Neue', sans-serif;
     }
