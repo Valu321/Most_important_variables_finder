@@ -1,115 +1,133 @@
 # 📊 Aplikacja do Analizy Ważności Cech (Feature Importance App)
 
-Kompleksowe narzędzie AutoML oparte na Streamlit i PyCaret, które automatycznie analizuje dane, trenuje modele (Regresja/Klasyfikacja) i identyfikuje kluczowe cechy. Aplikacja wykorzystuje najnowszy model OpenAI (GPT-4o-mini) do generowania biznesowych opisów wyników oraz Langfuse do monitorowania działania LLM.
+Kompleksowe narzędzie AutoML oparte na Streamlit i PyCaret, które automatycznie analizuje dane, trenuje modele (Regresja/Klasyfikacja) i identyfikuje kluczowe cechy wpływające na wynik.
 
-## 🚀 Funkcjonalności
+Aplikacja wykorzystuje model OpenAI (GPT-4o-mini) do generowania biznesowych opisów wyników oraz Langfuse do monitorowania jakości działania LLM.
 
-- **Automatyczne wykrywanie problemu**: System sam rozpoznaje, czy dane wymagają modelu klasyfikacji czy regresji
-- **AutoML (PyCaret)**: Trenuje i porównuje wiele modeli (Random Forest, XGBoost, LightGBM), wybierając najlepszy
-- **Wizualizacja**: Interaktywne wykresy ważności cech przy użyciu Plotly
-- **AI Insights**: Automatyczne generowanie opisów biznesowych i wniosków przez integrację z OpenAI API (model GPT-4o-mini)
-- **Monitoring (Observability)**: Śledzenie kosztów i jakości zapytań do LLM dzięki integracji z Langfuse
+---
+
+## 🚀 Główne funkcjonalności
+
+### 🧠 Inteligentna Analiza
+
+- **Smart Preprocessing**: Automatyczna konwersja czasu (np. "MM:SS") na sekundy oraz inteligentne czyszczenie typów numerycznych
+- **Safety Guard**: System automatycznie wykrywa problemy z danymi (np. zbyt wiele unikalnych klas w klasyfikacji) i bezpiecznie przełącza tryb na Regresję, aby uniknąć błędów
+- **Auto-Detection**: Heurystyczne rozpoznawanie typu problemu (Klasyfikacja vs Regresja)
+- **Auto-Delimiter Detection**: Automatyczne wykrywanie separatora w plikach CSV (przecinek, średnik, tabulator, pipe)
+
+### 🛡️ Stabilność i Bezpieczeństwo
+
+- **Memory Guard** 🆕: Wbudowany monitor pamięci RAM działający w tle, zapobiegający awariom (OOM Kill) na mniejszych instancjach chmurowych
+- **RODO/GDPR**: Dane przetwarzane są wyłącznie w pamięci RAM (brak zapisu na dysku). Do AI wysyłane są tylko zanonimizowane nazwy kolumn i statystyki
+- **File Size Limit**: Ochrona przed przeciążeniem - maksymalny rozmiar pliku 10MB
+
+### 📈 Funkcje Biznesowe
+
+- **Obsługa plików**: CSV oraz Excel (.xlsx)
+- **Wizualizacja**: Interaktywne wykresy ważności cech (Plotly)
+- **AI Reports**: Automatyczne raporty biznesowe generowane przez GPT-4o-mini
+
+---
 
 ## 🛠️ Stos technologiczny
 
-- **Frontend**: Streamlit
-- **ML Core**: PyCaret, Scikit-learn, Pandas
-- **LLM**: OpenAI API (GPT-4o-mini)
-- **Observability**: Langfuse
-- **Deployment**: Docker, DigitalOcean App Platform
+| Kategoria | Technologie |
+|-----------|-------------|
+| **Frontend** | Streamlit |
+| **ML Core** | PyCaret, Scikit-learn, Pandas, NumPy |
+| **System** | psutil (monitoring zasobów) |
+| **AI/LLM** | OpenAI API (GPT-4o-mini) |
+| **Observability** | Langfuse |
+| **Infrastruktura** | Docker, DigitalOcean App Platform |
 
-## ⚙️ Instalacja i uruchomienie lokalne
+---
 
-### Wymagania wstępne
+## 💻 Instalacja i uruchomienie lokalne
 
-- Python 3.10 lub nowszy (zalecane ze względu na stabilność PyCaret)
-- Klucz API OpenAI (wymagany do generowania opisów)
+### 1. Wymagania
 
-### 1. Klonowanie repozytorium
+- **Python 3.10+** (Zalecane ze względu na kompatybilność PyCaret)
+- **Klucz API OpenAI** (do generowania opisów)
+
+### 2. Instalacja
 
 ```bash
+# Klonowanie repozytorium
 git clone https://github.com/Valu321/Most_important_variables_finder.git
 cd Most_important_variables_finder
-```
 
-### 2. Utworzenie środowiska wirtualnego (zalecane)
-
-```bash
-# Windows
+# Utworzenie środowiska wirtualnego
 python -m venv venv
+
+# Windows:
 .\venv\Scripts\activate
 
-# macOS/Linux
-python3 -m venv venv
+# Mac/Linux:
 source venv/bin/activate
-```
 
-### 3. Instalacja zależności
-
-```bash
+# Instalacja zależności
 pip install -r requirements.txt
 ```
 
-### 4. Konfiguracja zmiennych środowiskowych
+### 3. Konfiguracja (.env)
 
-Utwórz plik `.env` na podstawie wzoru (lub skopiuj poniższe):
+Utwórz plik `.env` w głównym katalogu:
 
 ```env
 OPENAI_API_KEY=sk-twoj-klucz-api
+# Opcjonalnie dla Langfuse:
 LANGFUSE_PUBLIC_KEY=pk-lf-...
 LANGFUSE_SECRET_KEY=sk-lf-...
 LANGFUSE_HOST=https://cloud.langfuse.com
 ```
 
-### 5. Uruchomienie aplikacji
+### 4. Uruchomienie
 
 ```bash
 streamlit run app.py
 ```
 
-Aplikacja będzie dostępna pod adresem: `http://localhost:8501`
+Aplikacja dostępna pod adresem: `http://localhost:8501`
 
-## 🐳 Uruchomienie z Dockerem
+---
 
-Aplikacja posiada gotową konfigurację Docker, co jest zalecane ze względu na złożoność zależności PyCaret.
+## 📖 Jak używać?
 
-**Zbuduj obraz:**
+1. **Panel boczny**: Wgraj plik z danymi (CSV lub Excel)
+2. **Konfiguracja**: Wybierz kolumnę docelową (Target), którą chcesz przewidywać
+3. **Tryb**: Zostaw "Auto" lub wymuś typ problemu (Klasyfikacja/Regresja)
+4. **Analiza**: Kliknij **"Rozpocznij Analizę"**
+5. **Wyniki**: Obserwuj pasek postępu i zużycie pamięci. Po zakończeniu otrzymasz wykres i raport AI
 
-```bash
-docker build -t feature-app .
-```
+---
 
-**Uruchom kontener:**
+## ☁️ Wdrożenie (Deployment)
 
-```bash
-docker run -p 8501:8501 --env-file .env feature-app
-```
+Szczegółowe instrukcje dotyczące budowania obrazów Docker oraz wdrażania na platformy chmurowe (DigitalOcean App Platform) znajdują się w dedykowanym pliku:
 
-## ☁️ Wdrożenie (DigitalOcean App Platform)
+👉 **[DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md)**
 
-Projekt jest skonfigurowany do automatycznego wdrożenia na DigitalOcean App Platform przy użyciu pliku `app.yaml` i `Dockerfile`.
-
-1. Utwórz aplikację w panelu DigitalOcean wybierając źródło GitHub
-2. Platforma powinna automatycznie wykryć plik `Dockerfile` (zdefiniowane w `app.yaml`)
-3. **Ważne**: Wybierz plan **Basic S** (1GB RAM) lub wyższy. Plan 512MB jest niewystarczający dla PyCaret
-4. Dodaj klucze API (`OPENAI_API_KEY` itd.) w sekcji **Environment Variables** jako **Secrets**
-
-Szczegółowe instrukcje wdrożenia znajdziesz w pliku `DEPLOYMENT_GUIDE.md`.
+---
 
 ## 📂 Struktura projektu
 
 ```
 .
-├── app.py                      # Główny plik aplikacji Streamlit
-├── app.yaml                    # Konfiguracja wdrożenia DigitalOcean App Platform
-├── Dockerfile                  # Konfiguracja obrazu Docker
-├── requirements.txt            # Zależności Python
-├── .env                        # Zmienne środowiskowe (nie commitować!)
-├── .gitignore                  # Pliki ignorowane przez Git
-├── .dockerignore               # Pliki ignorowane przez Docker (build context)
-└── DEPLOYMENT_GUIDE.md         # Instrukcja wdrożenia
+├── app.py                  # Główna logika aplikacji (Streamlit + PyCaret)
+├── app_copy.py             # Narzędzie diagnostyczne do testowania pamięci (Memory Leak Test)
+├── requirements.txt        # Zależności Python
+├── Dockerfile              # Konfiguracja obrazu Docker (zawiera libgomp1)
+├── app.yaml                # Konfiguracja DigitalOcean App Platform
+├── README.md               # Ten plik
+└── DEPLOYMENT_GUIDE.md     # Instrukcja wdrożenia
 ```
+
+---
 
 ## 🤝 Wsparcie
 
-Jeśli napotkasz problemy z instalacją PyCaret, upewnij się, że masz zainstalowane biblioteki systemowe (np. `libgomp1` na Linuxie - jest to obsłużone w dołączonym `Dockerfile`).
+Jeśli napotkasz problemy:
+
+- Sprawdź sekcję **Rozwiązywanie problemów** w [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md)
+- Upewnij się, że masz odpowiednią ilość pamięci RAM (min. 1GB, zalecane 2GB)
+- Sprawdź logi aplikacji w przypadku błędów PyCaret/LightGBM

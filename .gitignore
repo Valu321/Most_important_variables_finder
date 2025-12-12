@@ -82,7 +82,6 @@ logs.log
 *.log
 
 # Files to ignore
-DEPLOYMENT_GUIDE.md
 app_copy.py
 requirements_copy.txt
 *.jpg

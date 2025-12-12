@@ -389,7 +389,7 @@ class OpenAIService:
 
 def render_sidebar(columns: List[str] = None):
     st.sidebar.header("📁 Dane")
-    uploaded_file = st.sidebar.file_uploader("Wgraj plik CSV (maks. 10MB)", type=['csv'])
+    uploaded_file = st.sidebar.file_uploader("Wgraj plik CSV lub Excel (maks. 10MB)", type=['csv', 'xlsx'])
     
     if uploaded_file is not None and uploaded_file.size > 10 * 1024 * 1024:
         st.sidebar.error("🚨 Plik jest za duży! Maks. 10MB.")
@@ -438,6 +438,8 @@ def render_sidebar(columns: List[str] = None):
 @st.cache_data
 def load_data(file) -> pd.DataFrame:
     try:
+        if file.name.lower().endswith('.xlsx'):
+            return pd.read_excel(file)
         return pd.read_csv(file, sep=None, engine='python')
     except:
         file.seek(0)
@@ -471,7 +473,7 @@ def main():
     # Tutaj uprościmy: Najpierw file uploader.
     
     st.sidebar.header("📁 Dane")
-    uploaded_file = st.sidebar.file_uploader("Wgraj plik CSV (maks. 10MB)", type=['csv'])
+    uploaded_file = st.sidebar.file_uploader("Wgraj plik CSV lub Excel (maks. 10MB)", type=['csv', 'xlsx'])
     
     # Reszta zmiennych
     user_api_key = ""
