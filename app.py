@@ -513,9 +513,16 @@ def main():
 
     # --- DALSZA CZĘŚĆ SIDEBARU (API I INFO) ---
     st.sidebar.divider()
-    st.sidebar.warning(
-        "Nazwy kolumn są przesyłane do OpenAI. Nie wgrywaj danych RODO."
-    )
+    
+    # Nowa sekcja RODO i bezpieczeństwa
+    with st.sidebar.expander("🔒 Bezpieczeństwo i RODO", expanded=False):
+        st.markdown("""
+        **Nota dotycząca prywatności:**
+        1. **Brak trwałego zapisu:** Wgrane pliki są przetwarzane wyłącznie w pamięci operacyjnej (RAM) na czas trwania sesji i nie są zapisywane na dysku serwera.
+        2. **Dane wrażliwe:** Aplikacja służy do celów analitycznych. **Zabrania się wgrywania plików zawierających dane osobowe** (np. imiona, nazwiska, PESEL, adresy) lub inne dane wrażliwe podlegające ochronie RODO.
+        3. **Integracja z AI:** Do dostawcy modelu językowego (OpenAI) przesyłane są wyłącznie **zanonimizowane statystyki** oraz **nazwy kolumn**. Surowe dane z wierszy nigdy nie opuszczają środowiska aplikacji.
+        """)
+
     st.sidebar.header("🔑 API Key")
     user_api_key = st.sidebar.text_input(
         "Klucz OpenAI API",
